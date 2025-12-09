@@ -1,0 +1,28 @@
+targets:
+  - name: "webscraper_laptops"
+    site_name: "webscraper_laptops"
+
+    # LIST PAGE CONFIG
+    # URL of the laptops listing page
+    list_url: "https://webscraper.io/test-sites/e-commerce/allinone/computers/laptops"
+
+    # CSS selector for product detail links on the listing page
+    link_selector: "a.title"
+
+    # DETAIL PAGE SELECTORS
+    detail_selectors:
+      # Product title on the detail page
+      title: "h4.title.card-title"
+
+      # Product price on the detail page
+      price: "h4.price"
+
+      # Main image URL on the detail page
+      image_url: ".thumbnail img"
+
+      # Product description paragraph
+      description: "p.description"
+
+    # LIMITS
+    limits:
+      max_items: 10
