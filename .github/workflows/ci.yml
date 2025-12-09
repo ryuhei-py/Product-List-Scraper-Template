@@ -10,7 +10,7 @@ on:
       - main
 
 jobs:
-  test:
+  lint-and-test:
     runs-on: ubuntu-latest
 
     steps:
@@ -27,6 +27,10 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run tests
+      - name: Run ruff
         run: |
-          pytest || echo "No tests yet"
+          ruff check src tests
+
+      - name: Run pytest
+        run: |
+          pytest

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urljoin
+
 import argparse
 import sys
 from pathlib import Path
@@ -20,6 +22,7 @@ def run_pipeline(
     limit: int | None = None,
     dry_run: bool = False,
 ) -> int:
+    """Run the scraping pipeline for a single target config."""
     list_url = target_config.get("list_url")
     link_selector = target_config.get("link_selector")
     detail_selectors = target_config.get("detail_selectors") or {}
@@ -32,22 +35,31 @@ def run_pipeline(
     list_parser = ListPageParser(link_selector=link_selector)
     detail_parser = DetailPageParser(selectors=detail_selectors)
 
+    # 1) Fetch list page
     try:
         list_html = fetcher.get(list_url)
     except FetchError as exc:
         print(f"Failed to fetch list page: {exc}", file=sys.stderr)
         return 1
 
+    # 2) Parse product URLs from list page
     product_urls = list_parser.parse_list(list_html)
     if limit is not None:
         product_urls = product_urls[:limit]
 
     print(f"Found {len(product_urls)} product URLs")
 
+    # 3) Fetch and parse each detail page
     records: list[dict[str, Any]] = []
     for url in product_urls:
+        # If the URL is relative (starts with "/"), make it absolute
+        if url.startswith("/"):
+            full_url = urljoin(list_url, url)
+        else:
+            full_url = url
+
         try:
-            detail_html = fetcher.get(url)
+            detail_html = fetcher.get(full_url)
         except FetchError as exc:
             print(f"Skipping {url}: {exc}", file=sys.stderr)
             continue
@@ -61,13 +73,15 @@ def run_pipeline(
         print("No records parsed; aborting.", file=sys.stderr)
         return 1
 
+    # 4) Export to CSV (unless dry-run)
     if not dry_run:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         export_to_csv(records, output_path)
         print(f"Wrote CSV to {output_path}")
     else:
         print("Dry run enabled; skipping export.")
 
+    # 5) Validate and print quality report
     summary = validate_records(records)
     report = format_quality_report(summary)
     print(report)

@@ -49,6 +49,26 @@ def export_to_json(records: Iterable[Mapping[str, Any]], path: str | Path) -> No
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def export_to_excel(
+    records: Iterable[Mapping[str, Any]],
+    path: str | Path,
+    sheet_name: str = "products",
+) -> None:
+    """Export records to an Excel file."""
+    try:
+        import pandas as pd
+    except ImportError as exc:  # pragma: no cover - defensive
+        raise ImportError(
+            "pandas is required for export_to_excel; please install it via requirements.txt"
+        ) from exc
+
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    df = pd.DataFrame(list(records))
+    df.to_excel(output_path, index=False, sheet_name=sheet_name)
+
+
 if __name__ == "__main__":
     sample_records = [
         {"id": "p1", "title": "Sample Product", "price": "9.99"},

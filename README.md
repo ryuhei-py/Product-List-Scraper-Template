@@ -1,5 +1,9 @@
 # Product List Scraper Template
 
+[![CI](https://github.com/ryuhei-py/Product-List-Scraper-Template/actions/workflows/ci.yml/badge.svg)](https://github.com/ryuhei-py/Product-List-Scraper-Template/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 A reusable, configurable product / catalog list scraper template for Python.
 
 This repository is designed as a **portfolio-ready, production-oriented template** you can quickly adapt for real client projects (e.g., Upwork jobs) by changing only the configuration files, not the core code.
