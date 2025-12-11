@@ -94,3 +94,31 @@ def test_parse_detail_missing_selectors_and_elements():
     assert data["price"] is None
     assert data["image_url"] is None
     assert data["description"] is None
+
+
+def test_parse_detail_extracts_extra_fields():
+    html = """
+    <html>
+        <body>
+            <h1 class="product-title">Product with SKU</h1>
+            <div class="price">$10.00</div>
+            <img class="product-image" src="https://example.com/img.jpg" />
+            <div class="description">Desc</div>
+            <span class="sku-value">SKU-123</span>
+        </body>
+    </html>
+    """
+    parser = DetailPageParser(
+        selectors={
+            "title": "h1.product-title",
+            "price": ".price",
+            "image_url": "img.product-image",
+            "description": ".description",
+            "sku": ".sku-value",
+        }
+    )
+
+    data = parser.parse_detail(html)
+
+    assert data["title"] == "Product with SKU"
+    assert data["sku"] == "SKU-123"

@@ -33,10 +33,11 @@ class DetailPageParser:
     def parse_detail(self, html: str) -> dict[str, str | None]:
         """Extract detail fields (title, price, image_url, description) from HTML."""
         soup = BeautifulSoup(html, "html.parser")
-        fields = ["title", "price", "image_url", "description"]
+        core_fields = ["title", "price", "image_url", "description"]
+        all_fields = list(dict.fromkeys(core_fields + list(self.selectors.keys())))
         data: dict[str, str | None] = {}
 
-        for field in fields:
+        for field in all_fields:
             selector = self.selectors.get(field)
             if not selector:
                 data[field] = None
