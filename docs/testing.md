@@ -1,423 +1,196 @@
-# Testing ? Product List Scraper Template
+# Testing guide
+This document explains the testing strategy for the Product List Scraper Template, how to run tests locally, and how to extend the test suite safely when adapting the template for client work.
 
-This document outlines the **testing strategy**, how to **run** the tests, and how to **extend** them when you add features or adapt the template for new projects.
-
-The test suite is meant to give both you and your clients confidence that the scraper behaves correctly and can evolve safely over time.
-
----
-
-## Testing goals
-
-The test suite is designed to ensure:
-
-1. **Correctness of core behavior**
-   - HTTP fetching and retry behavior.
-   - HTML parsing for list and detail pages.
-   - CSV (and optional JSON) exports.
-   - Data validation logic and quality reporting.
-   - Basic CLI orchestration (end-to-end smoke tests).
-   - Configuration loading and validation.
-2. **Stability of the template**
-   - Changes to one component do not unintentionally break others.
-   - Refactoring (e.g., internal cleanup or performance tweaks) remains safe.
-   - Regression bugs can be detected early.
-3. **Confidence for clients and reviewers**
-   - The presence of tests demonstrates engineering discipline and quality.
-   - It is easy to show that behavior is verified under small, deterministic scenarios.
-   - CI status is visible on GitHub as an additional quality signal.
+Goals:
+- Ensure correctness of parsing, config validation, exporting, and CLI orchestration.
+- Keep tests deterministic and fast (no live network calls).
+- Provide confidence that config-only changes will not break core behavior.
 
 ---
 
-## Test suite structure
+## Test philosophy
+This section outlines the testing approach.
 
-All tests live under the `tests/` directory:
+- Unit tests validate small, pure components (parsers, exporter logic, config validation).
+- CLI tests validate orchestration and integration boundaries using mocked fetchers.
+- No live scraping in tests to avoid flaky failures and accidental policy violations.
 
-```text
-tests/
-├─ conftest.py
-├─ test_fetcher.py
-├─ test_parser.py
-├─ test_exporter.py
-├─ test_validator.py
-├─ test_config.py
-└─ test_cli.py
+The guiding principle is: tests should fail only when behavior changes, not when the internet changes.
+
+---
+
+## Running tests locally
+This section explains how to run checks.
+
+### Install dev dependencies
+
+# Install the package in editable mode
+```bash
+pip install -e .
 ```
 
-Each file focuses on a specific part of the system.
+### Run linting and tests
 
-### test_fetcher.py
+# Lint the code
+```bash
+ruff check src tests
+```
 
-#### Scope
-
-Covers the Fetcher class in `src/product_scraper/fetcher.py`.
-
-#### Typical behaviors tested
-
-- Successful HTTP requests (happy path).
-- Retry behavior on transient errors (e.g., 5xx or connection errors).
-- No retry on non-retryable errors (e.g., certain 4xx responses), depending on policy.
-- Correct raising of `FetchError` when retries are exhausted.
-- Proper handling of timeouts.
-
-#### Implementation notes
-
-- Network calls are not performed against real endpoints.
-- Tests use mocking / monkeypatching of the underlying HTTP client.
-- Timeouts and retries are tested with synthetic scenarios to keep tests fast and deterministic.
-
-### test_parser.py
-
-#### Scope
-
-Covers `ListPageParser` and `DetailPageParser` in `src/product_scraper/parser.py`.
-
-#### ListPageParser
-
-Tests focus on:
-
-- Extracting product URLs from list-page HTML using `link_selector`.
-- Handling pages with:
-  - Multiple links.
-  - No matching links (result should be an empty list).
-- Robustness against minor HTML irregularities.
-- Ensuring the parser returns raw href strings; URL normalization is done in the CLI.
-
-#### DetailPageParser
-
-Tests focus on:
-
-- Extracting core fields:
-  - `title`, `price`, `image_url`, `description`.
-- Ensuring missing selectors or missing elements yield `None` values in the result.
-- Supporting extra fields:
-  - When `detail_selectors` includes additional keys (e.g., `sku`, `category`), those fields are also extracted.
-- Image URL extraction behavior:
-  - Prefer the `src` attribute when present.
-  - Fall back to element text if `src` is missing.
-
-HTML snippets in tests are:
-
-- Small and self-contained.
-- Deterministic (no network or external dependencies).
-- Easy to modify when page structures change.
-
-### test_exporter.py
-
-#### Scope
-
-Covers CSV (and optional JSON) export functions in `src/product_scraper/exporter.py`.
-
-#### Typical behaviors tested
-
-- CSV export:
-  - Column ordering derived from the first record.
-  - Correct handling of:
-    - Missing keys (empty cells or `None`).
-    - Mixed records with different sets of fields.
-  - Behavior when the records list is empty (e.g., creating a file with only headers or not creating a file, depending on design).
-- JSON export (if implemented):
-  - Round-trip correctness:
-    - Dumping a list of dicts to JSON and loading it back yields the same structure.
-  - Handling of `None` / empty values.
-
-#### Implementation notes
-
-- Tests use temporary directories via `tmp_path` or similar fixtures.
-- No files are written into the repository itself during testing.
-- After each export, tests assert that:
-  - The expected files exist.
-  - Their contents follow the expected format (e.g., correct headers, number of lines).
-
-### test_validator.py
-
-#### Scope
-
-Covers validation logic in `src/product_scraper/validator.py`.
-
-#### Typical behaviors tested
-
-- Validation of a list of records:
-  - Correct counting of total records.
-  - Correct counting of missing values per field.
-  - Handling of an empty record list (should not crash).
-- Quality report formatting:
-  - `format_quality_report` (or equivalent function) produces a human-readable multi-line string.
-  - The report includes:
-    - Total record count.
-    - Per-field missing counts.
-    - Any relevant indicators used in operations (e.g., percentages, warnings).
-
-Tests are designed to ensure that changes in record structure or validation thresholds are easy to reason about and do not accidentally break the report format.
-
-### test_config.py
-
-#### Scope
-
-Covers configuration loading and validation functions in `src/product_scraper/config.py`.
-
-#### Typical behaviors tested
-
-- `load_targets_config`:
-  - Successful loading of a valid YAML file.
-  - Handling of empty files or missing keys gracefully, when appropriate.
-- `get_targets_from_config` and any config validation helpers:
-  - Reject configs without a `targets` key.
-  - Reject configs where `targets` is not a non-empty list.
-  - Reject targets that:
-    - Are not mappings (dict-like).
-    - Lack required fields (`list_url`, `link_selector`).
-    - Have `detail_selectors` not defined as a mapping.
-  - Accept valid configs and return a normalized list of targets.
-- `load_settings_config`:
-  - Returns an empty dict when the file does not exist.
-  - Loads a mapping when the file exists.
-  - Raises an error when the top-level YAML structure is not a mapping (for safety).
-
-These tests protect you against subtle config regressions that might otherwise only be caught at runtime in production.
-
-### test_cli.py
-
-#### Scope
-
-Covers high-level CLI behavior in `src/product_scraper/cli.py`.
-
-#### Typical behaviors tested
-
-- A “smoke test” for `run_pipeline` with:
-  - A fake Fetcher (via monkeypatch).
-  - Small, deterministic HTML for list and detail pages.
-  - An in-memory target configuration.
-  - A temporary output path.
-- Running the pipeline end-to-end for a simple target:
-  - Ensuring that:
-    - Exit code is 0 on success.
-    - The output CSV file is created and non-empty (when not in `--dry-run` mode).
-- Verifying that `--dry-run`-equivalent behavior:
-  - Skips writing the output file.
-  - Still runs parsing and (optionally) validation.
-- Ensuring that config validation errors:
-  - Produce a non-zero exit code.
-  - Print a clear error message to stderr.
-
-#### Implementation notes
-
-- Tests avoid actual network calls and disk side-effects beyond the temporary directory.
-- The CLI is exercised via its public functions (e.g., `run_pipeline`), not via actual subprocess calls.
-- This keeps tests fast, deterministic, and easy to run repeatedly.
-
----
-
-## Running tests
-
-### Basic usage
-
-From the project root, with your virtual environment activated, run the full test suite:
-
-
-
+# Run the test suite
 ```bash
 pytest
 ```
 
-This will:
+### Optional Excel support during development
 
-- Discover all tests under `tests/`.
-- Run them with the default pytest configuration supplied by `pyproject.toml`.
-
-### Common variations
-
-Run tests in quiet mode:
-
-
-
+# Install Excel extras
 ```bash
-pytest -q
+pip install -e ".[excel]"
 ```
-
-Run a single test file:
-
-
-
-```bash
-pytest tests/test_parser.py
-```
-
-Run a specific test function:
-
-
-
-```bash
-pytest tests/test_parser.py::test_list_parser_basic
-```
-
-Run with verbose output and show names of all tests:
-
-
-
-```bash
-pytest -v
-```
-
-### Integration with tooling
-
-If you use additional tools (e.g., `ruff`, coverage plugins, or IDE integrations):
-
-- Configure them to use the same virtual environment.
-- Keep the main invocation (`pytest`) simple; advanced options can be specified in `pyproject.toml` or tool-specific config files.
 
 ---
 
-## Adding new tests
+## What is covered by tests
+This section lists coverage per test module.
 
-When you extend the template (e.g., new modules, new features), follow these guidelines.
+### `tests/test_config.py`
+- Validates configuration parsing and schema rules, including:
+  - Target list structure (`targets:` must be a list).
+  - Required keys (`name`, `list_url`).
+  - Mode detection and mode-specific requirements:
+    - List-only mode requires `item_selector` and non-empty `item_fields`.
+    - Detail-follow mode requires `link_selector` and non-empty `detail_selectors`.
+  - Selector strings must be non-empty.
+  - Target names must be unique.
+- These tests should catch most “bad YAML” issues before runtime.
 
-### Mirror the module structure
+### `tests/test_parser.py`
+- Validates HTML parsing behavior for:
+  - Selector spec syntax (plain text, `@attr`, `::attr(name)`, `::text`).
+  - List-only parsing (`ListItemsParser.parse_items`).
+  - Detail-follow parsing (`ListPageParser.parse_links` and `DetailPageParser.parse_detail`).
+- All parser tests use static HTML snippets embedded in the test.
 
-For a new module:
+### `tests/test_fetcher.py`
+- Validates the HTTP layer without real network calls, typically by mocking:
+  - Success responses.
+  - Retryable failures (for example, 429 and 5xx).
+  - Non-retryable failures (for example, other 4xx).
+  - Session usage / call paths (depending on implementation).
+- The test suite ensures:
+  - Retry counts are respected.
+  - Exceptions are converted into `FetchError` with URL/status context.
+  - No test sleeps (defaults should avoid backoff delays).
 
-- `src/product_scraper/something.py`
+### `tests/test_exporter.py`
+- Validates output serialization, especially:
+  - CSV export and the stable union-of-keys header policy.
+  - Correct mapping of missing keys to empty cells.
+- Optional:
+  - If JSON export has helpers, tests may validate JSON shape.
+  - Excel export is usually tested lightly (or behind optional dependencies) to keep CI stable.
 
-Create a corresponding test module:
-
-- `tests/test_something.py`
-
-This simple rule keeps the test suite navigable and helps future contributors find relevant tests quickly.
-
-### Keep tests focused and deterministic
-
-- Avoid real network calls:
-  - Use mocking or monkeypatching for HTTP clients.
-  - Provide small HTML/JSON strings directly in tests, or load them from static fixtures if needed.
-- Avoid slow tests:
-  - Do not introduce actual sleep calls; simulate delays via configuration or mocks.
-- Avoid non-deterministic behavior:
-  - Randomness should be either mocked or seeded.
-  - External services or APIs should always be replaced with predictable stubs.
-
-### Test the public API
-
-Prefer testing public functions and classes exposed by the package.
-
-Avoid relying on private implementation details (e.g., helper functions with leading underscores) unless you have strong reasons and document them clearly.
-
-This approach allows internals to be refactored without breaking the tests.
-
-### Document the intent
-
-- Use clear test names (e.g., `test_list_parser_ignores_links_without_href`).
-- Add docstrings or inline comments when behavior is not obvious.
-- When fixing a bug, consider adding a test that would have failed before the fix.
-
-This makes the test suite act as executable documentation of the system’s behavior.
-
----
-
-## Test data and fixtures
-
-### HTML snippets
-
-For parser tests, use:
-
-- Small, self-contained HTML strings.
-- Only the minimal markup needed for the behavior you are testing.
-- Clear structure so that CSS selectors are easy to verify and update.
-
-If you find yourself copying large HTML documents, consider:
-
-- Extracting only the relevant parts.
-- Using separate fixture files if some complexity is genuinely needed.
-
-### Temporary files and directories
-
-Use pytest fixtures like `tmp_path`:
-
-- To create temporary directories and files for exporter tests.
-- To avoid writing into the repository tree.
-- To ensure that each test runs in isolation.
-
-### Shared fixtures (`conftest.py`)
-
-The `tests/conftest.py` file can:
-
-- Define shared fixtures (e.g., sample HTML for parsers, pre-configured target dictionaries).
-- Provide reusable mocks or helper functions.
-- Configure pytest options globally (if needed).
-
-Keep `conftest.py` small and focused; avoid complex logic that makes tests harder to read.
+### `tests/test_cli.py`
+- Validates CLI orchestration using mocked fetchers and temporary output paths:
+  - `--dry-run` produces no output file and exits cleanly.
+  - `--limit` limits record count.
+  - Mode behaviors:
+    - List-only mode parses items and normalizes `*_url` fields against `list_url`.
+    - Detail-follow mode adds `detail_url` and normalizes URL fields appropriately.
+  - Configuration errors cause non-zero exit codes and helpful messages.
 
 ---
 
-## CI integration
+## No live network calls
+This section emphasizes keeping tests offline.
 
-A basic GitHub Actions workflow (`.github/workflows/ci.yml`) is set up to:
+Tests must never hit real targets. This is both a reliability practice and a compliance/safety practice. When you need to test scraping behavior:
 
-- Check out the repository.
-- Set up a suitable Python version.
-- Install dependencies (from `requirements.txt`).
-- Optionally run linters (e.g., `ruff`).
-- Run the test suite with `pytest`.
-
-This ensures that:
-
-- Every push and pull request is automatically validated.
-- Test failures are detected early.
-- The CI badge on the README provides an at-a-glance indication of project health for clients and reviewers.
-
-If you extend the project (e.g., add new dependencies, new commands), remember to update the CI workflow as needed.
+- Copy a representative HTML snippet into a fixture or string.
+- Validate selectors against that snippet.
+- Mock the fetcher to return that HTML.
 
 ---
 
-## Recommended workflows
+## Extending tests when adding a new client target
+This section describes extending coverage for new targets.
 
-### During development
+When adapting this template for a specific site, you typically change `config/targets.yml`, selectors, and output field names. Recommended steps:
 
-Write or update tests first when adding or changing behavior.
+- Add or update HTML fixtures (small snippets) that reflect the target’s structure.
+- Add a parser unit test that validates the selectors you plan to ship.
+- Add a CLI test that:
+  - Mocks list HTML (and detail HTML if detail-follow).
+  - Runs the CLI in dry-run or temp-output mode.
+  - Asserts record keys and a few values.
 
-Run:
+This approach is faster than repeated manual scraping runs and prevents regressions.
 
+---
 
+## Debugging failing tests
+This section lists common failure types and fixes.
 
+Ruff failures  
+Run: `ruff check src tests`  
+Typical causes: unused imports, formatting/style issues, inconsistent typing. Fix style issues before interpreting logic failures.
+
+Parser failures  
+Common causes: selector specs changed; HTML fixtures no longer match parser behavior; attr/text mode interpretation changed. Fix by confirming selector specs (`@attr`, `::attr()`, `::text`) and verifying the fixture HTML; adjust tests only when behavior changes intentionally.
+
+CLI failures  
+Common causes: CLI flag changes; output behavior changed (for example, union-of-keys headers or new trace fields); mode detection logic changed. Fix by keeping CLI options backward compatible where possible; updating tests to match intended behavior; ensuring `--dry-run` and `--limit` remain stable.
+
+Fetcher failures  
+Common causes: patch target changed (for example, `requests.get` vs `session.get`); retry policy expanded (for example, include 429/5xx). Fix by patching the correct call site and asserting behavior rather than internal implementation details.
+
+---
+
+## CI expectations
+This section describes CI checks.
+
+CI should run:
+
+# Lint the code
+```bash
+ruff check src tests
+```
+
+# Run tests
 ```bash
 pytest
 ```
 
-frequently (or a subset via `pytest tests/test_xxx.py`).
-
-Fix failing tests or adjust them if expected behavior changes (aligned with design decisions).
-
-### Before committing
-
-Run `pytest` locally and ensure all tests pass.
-
-Optionally, run linting tools such as `ruff`:
-
-
-
-```bash
-ruff src tests
-```
-
-Check for obvious formatting or style issues.
-
-### Before release / when presenting to a client
-
-Run the full test suite in a clean environment (e.g., new virtualenv).
-
-Confirm that CI is green for the branch or commit you want to present.
-
-Be prepared to point to:
-
-- The test coverage of critical components.
-- How failures would be detected and addressed.
+All tests should pass without network access, on a clean environment, with minimal optional dependencies (Excel deps should be optional).
 
 ---
 
-## Summary
+## Recommended developer workflow
+This section lists a suggested workflow.
 
-The test suite of the Product List Scraper Template is built to be:
+Before committing:
 
-- Comprehensive enough to protect core functionality.
-- Lightweight enough to run quickly during development and in CI.
-- Structured enough to be easily extended as you adapt the template to new projects.
+# Lint and test
+```bash
+ruff check src tests
+pytest
+```
 
-By mirroring the module structure, keeping tests deterministic, and integrating them into CI, you maintain a strong quality signal for both your own work and for clients who review this repository as part of your portfolio.
+Before opening a PR:
+- Ensure you added tests for any new parsing logic or schema changes.
+- Ensure your config examples still validate.
+- If you changed exporter behavior, update tests accordingly.
+
+---
+
+## Where to go next
+This section links to related docs.
+
+- `docs/CONFIG_GUIDE.md` for config + selector syntax.
+- `docs/architecture.md` for module boundaries and data contracts.
+- `docs/operations.md` for runtime tuning and troubleshooting.
+- `docs/SECURITY_AND_LEGAL.md` for compliance and safe scraping practices.
+
+---
+
+_Last updated: 2025-12-12_

@@ -1,8 +1,1 @@
-requests
-beautifulsoup4
-PyYAML
-python-dotenv
-pandas
-openpyxl
-pytest
-ruff
+.[excel]

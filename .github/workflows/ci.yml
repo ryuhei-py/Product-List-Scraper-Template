@@ -25,12 +25,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          python -m pip install -e ".[dev]"
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+
+          # (temporary diagnostic; keep until CI is green once, then you can remove)
+          python -m pip show ruff
 
       - name: Run ruff
         run: |
-          ruff check src tests
+          python -m ruff check src tests
 
       - name: Run pytest
         run: |
-          pytest
+          python -m pytest

@@ -1,9 +1,0 @@
-targets:
-  - name: example-site
-    list_url: "https://example.com/products"
-    link_selector: "a.product-link"
-    detail_selectors:
-      title: "h1.product-title"
-      price: ".price"
-      image_url: "img.product-image"
-      description: ".description"

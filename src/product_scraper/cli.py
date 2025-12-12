@@ -20,7 +20,7 @@ from product_scraper.config import (
 )
 from product_scraper.exporter import export_to_csv
 from product_scraper.fetcher import FetchError, Fetcher
-from product_scraper.parser import DetailPageParser, ListPageParser
+from product_scraper.parser import DetailPageParser, ListItemsParser, ListPageParser
 from product_scraper.validator import format_quality_report, validate_records
 
 
@@ -51,10 +51,25 @@ def run_pipeline(
     list_url = target_config.get("list_url")
     link_selector = target_config.get("link_selector")
     detail_selectors = target_config.get("detail_selectors") or {}
+    item_selector = target_config.get("item_selector")
+    item_fields = target_config.get("item_fields") or {}
 
-    if not list_url or not link_selector:
-        print("Config must include list_url and link_selector.", file=sys.stderr)
+    if not list_url:
+        print("Config must include list_url.", file=sys.stderr)
         return 1
+
+    list_only_mode = bool(item_selector or item_fields)
+    if list_only_mode:
+        if not item_selector or not item_fields:
+            print(
+                "List-only mode requires item_selector and item_fields.",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        if not link_selector:
+            print("Config must include link_selector.", file=sys.stderr)
+            return 1
 
     http_settings = (settings or {}).get("http", {}) or {}
     timeout = float(http_settings.get("timeout", 10.0))
@@ -71,8 +86,13 @@ def run_pipeline(
         max_retries=max_retries,
         headers=headers or None,
     )
-    list_parser = ListPageParser(link_selector=link_selector)
-    detail_parser = DetailPageParser(selectors=detail_selectors)
+    list_parser = ListPageParser(link_selector=link_selector) if not list_only_mode else None
+    detail_parser = DetailPageParser(selectors=detail_selectors) if not list_only_mode else None
+    list_items_parser = (
+        ListItemsParser(item_selector=item_selector, field_selectors=item_fields)
+        if list_only_mode
+        else None
+    )
 
     # 1) Fetch list page
     try:
@@ -81,38 +101,56 @@ def run_pipeline(
         print(f"Failed to fetch list page: {exc}", file=sys.stderr)
         return 1
 
-    # 2) Parse product URLs from list page
-    product_urls = list_parser.parse_list(list_html)
-    if limit is not None:
-        product_urls = product_urls[:limit]
-
-    logger.info("Found %s product URLs", len(product_urls))
-
-    # 3) Fetch and parse each detail page
     records: list[dict[str, Any]] = []
-    base_url = list_url
-    for url in product_urls:
-        normalized = url.strip()
-        if not normalized:
-            continue
 
-        if normalized.lower().startswith("http"):
-            full_url = normalized
-        else:
-            full_url = urljoin(base_url, normalized)
+    if list_only_mode and list_items_parser is not None:
+        items = list_items_parser.parse_items(list_html)
+        if limit is not None:
+            items = items[:limit]
+        for record in items:
+            record["source_list_url"] = list_url
+            for key, value in list(record.items()):
+                if key.endswith("_url") and isinstance(value, str) and value:
+                    record[key] = urljoin(list_url, value)
+        records = items
+        logger.info("Parsed %s list-only records", len(records))
+    else:
+        # 2) Parse product URLs from list page
+        product_urls = list_parser.parse_list(list_html)
+        if limit is not None:
+            product_urls = product_urls[:limit]
 
-        try:
-            detail_html = fetcher.get(full_url)
-        except FetchError as exc:
-            print(f"Skipping {url}: {exc}", file=sys.stderr)
-            continue
+        logger.info("Found %s product URLs", len(product_urls))
 
-        record = detail_parser.parse_detail(detail_html)
-        records.append(record)
-        if delay_seconds > 0:
-            time.sleep(delay_seconds)
+        # 3) Fetch and parse each detail page
+        base_url = list_url
+        for url in product_urls:
+            normalized = url.strip()
+            if not normalized:
+                continue
 
-    logger.info("Parsed %s records", len(records))
+            if normalized.lower().startswith("http"):
+                full_url = normalized
+            else:
+                full_url = urljoin(base_url, normalized)
+
+            try:
+                detail_html = fetcher.get(full_url)
+            except FetchError as exc:
+                print(f"Skipping {url}: {exc}", file=sys.stderr)
+                continue
+
+            record = detail_parser.parse_detail(detail_html)
+            record["detail_url"] = full_url
+            record["source_list_url"] = list_url
+            image_url = record.get("image_url")
+            if isinstance(image_url, str) and image_url and not image_url.lower().startswith("http"):
+                record["image_url"] = urljoin(full_url, image_url)
+            records.append(record)
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
+
+        logger.info("Parsed %s records", len(records))
 
     if not records:
         print("No records parsed; aborting.", file=sys.stderr)
@@ -125,6 +163,8 @@ def run_pipeline(
         logger.info("Wrote CSV to %s", output_path)
     else:
         logger.info("Dry run enabled; skipping export.")
+        logger.info("Parsed %s records (sample: %s)", len(records), records[0] if records else {})
+        return 0
 
     # 5) Validate and print quality report
     validation_settings = (settings or {}).get("validation", {}) or {}

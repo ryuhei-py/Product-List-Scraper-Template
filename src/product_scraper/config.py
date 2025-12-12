@@ -44,25 +44,69 @@ def get_targets_from_config(config: Dict[str, Any]) -> list[Dict[str, Any]]:
     Requirements:
     - config must contain a "targets" key.
     - "targets" must be a non-empty list.
-    - Each target must be a mapping.
-    - Each target must have non-empty "list_url" and "link_selector" values.
-    - "detail_selectors" must be a mapping (may be empty).
+    - Each target must be a mapping with a non-empty "name".
+    - Names must be unique across targets.
+    - Supports two modes:
+      * Detail-follow mode (default): requires non-empty "list_url", "link_selector",
+        and non-empty mapping "detail_selectors".
+      * List-only mode: triggered if "item_selector" or "item_fields" is present.
+        Requires non-empty "list_url", non-empty "item_selector", and non-empty
+        mapping "item_fields".
+    - Selector mappings must contain non-empty string values.
     """
     targets = config.get("targets")
     if not isinstance(targets, list) or not targets:
         raise ConfigError("Config must contain a non-empty 'targets' list.")
+    seen_names: set[str] = set()
     validated: list[Dict[str, Any]] = []
     for index, target in enumerate(targets):
         if not isinstance(target, dict):
             raise ConfigError(f"Target at index {index} must be a mapping.")
-        if not target.get("list_url") or not target.get("link_selector"):
+        name = target.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ConfigError(f"Target at index {index} must have a non-empty 'name'.")
+        if name in seen_names:
+            raise ConfigError(f"Duplicate target name '{name}' found.")
+        seen_names.add(name)
+
+        list_url = target.get("list_url")
+        if not isinstance(list_url, str) or not list_url.strip():
             raise ConfigError(
-                f"Target at index {index} is missing 'list_url' or 'link_selector'."
+                f"Target at index {index} is missing a non-empty 'list_url'."
             )
-        detail_selectors = target.get("detail_selectors") or {}
-        if not isinstance(detail_selectors, dict):
-            raise ConfigError(
-                f"Target at index {index} has non-mapping 'detail_selectors'."
-            )
+
+        has_item_mode = ("item_selector" in target) or ("item_fields" in target)
+        if has_item_mode:
+            item_selector = target.get("item_selector")
+            item_fields = target.get("item_fields") or {}
+            if not isinstance(item_selector, str) or not item_selector.strip():
+                raise ConfigError(
+                    f"Target at index {index} is missing a non-empty 'item_selector'."
+                )
+            if not isinstance(item_fields, dict) or not item_fields:
+                raise ConfigError(
+                    f"Target at index {index} has invalid or empty 'item_fields'."
+                )
+            for key, selector in item_fields.items():
+                if not isinstance(selector, str) or not selector.strip():
+                    raise ConfigError(
+                        f"Target at index {index} has empty selector for field '{key}'."
+                    )
+        else:
+            link_selector = target.get("link_selector")
+            detail_selectors = target.get("detail_selectors") or {}
+            if not isinstance(link_selector, str) or not link_selector.strip():
+                raise ConfigError(
+                    f"Target at index {index} is missing a non-empty 'link_selector'."
+                )
+            if not isinstance(detail_selectors, dict) or not detail_selectors:
+                raise ConfigError(
+                    f"Target at index {index} has invalid or empty 'detail_selectors'."
+                )
+            for key, selector in detail_selectors.items():
+                if not isinstance(selector, str) or not selector.strip():
+                    raise ConfigError(
+                        f"Target at index {index} has empty selector for field '{key}'."
+                    )
         validated.append(target)
     return validated

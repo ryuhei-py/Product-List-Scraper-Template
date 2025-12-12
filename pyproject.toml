@@ -15,14 +15,16 @@ dependencies = [
     "beautifulsoup4",
     "PyYAML",
     "python-dotenv",
-    "pandas",
-    "openpyxl",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "ruff",
+]
+excel = [
+    "pandas",
+    "openpyxl",
 ]
 
 [tool.setuptools]
@@ -43,3 +45,6 @@ testpaths = [
 [tool.ruff]
 line-length = 88
 src = ["src", "tests"]
+
+[project.scripts]
+product-scraper = "product_scraper.cli:main"

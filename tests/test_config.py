@@ -1,6 +1,6 @@
 import pytest
 
-from product_scraper.config import ConfigError, get_targets_from_config
+from product_scraper.config import ConfigError, get_targets_from_config, load_settings_config
 
 
 def test_get_targets_from_config_valid():
@@ -70,3 +70,107 @@ def test_get_targets_from_config_invalid_detail_selectors():
 
     with pytest.raises(ConfigError):
         get_targets_from_config(config)
+
+
+def test_get_targets_from_config_empty_detail_selectors():
+    config = {
+        "targets": [
+            {
+                "name": "empty-detail",
+                "list_url": "https://example.com",
+                "link_selector": ".link",
+                "detail_selectors": {},
+            }
+        ]
+    }
+
+    with pytest.raises(ConfigError):
+        get_targets_from_config(config)
+
+
+def test_get_targets_from_config_valid_list_only():
+    config = {
+        "targets": [
+            {
+                "name": "list-only",
+                "list_url": "https://example.com/list",
+                "item_selector": ".item",
+                "item_fields": {
+                    "title": ".title",
+                    "price": ".price",
+                },
+            }
+        ]
+    }
+
+    targets = get_targets_from_config(config)
+
+    assert len(targets) == 1
+    assert targets[0]["item_selector"] == ".item"
+    assert targets[0]["item_fields"]["title"] == ".title"
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {
+            "targets": [
+                {
+                    "name": "missing-item-fields",
+                    "list_url": "https://example.com",
+                    "item_selector": ".item",
+                }
+            ]
+        },
+        {
+            "targets": [
+                {
+                    "name": "empty-item-fields",
+                    "list_url": "https://example.com",
+                    "item_selector": ".item",
+                    "item_fields": {},
+                }
+            ]
+        },
+        {
+            "targets": [
+                {
+                    "name": "empty-item-selector",
+                    "list_url": "https://example.com",
+                    "item_selector": "",
+                    "item_fields": {"title": ".title"},
+                }
+            ]
+        },
+    ],
+)
+def test_get_targets_from_config_invalid_list_only(config):
+    with pytest.raises(ConfigError):
+        get_targets_from_config(config)
+
+
+def test_load_settings_config_missing_file_returns_empty_dict(tmp_path):
+    settings_path = tmp_path / "missing_settings.yml"
+
+    assert not settings_path.exists()
+
+    result = load_settings_config(settings_path)
+
+    assert result == {}
+
+
+def test_load_settings_config_empty_file_returns_empty_dict(tmp_path):
+    settings_path = tmp_path / "empty_settings.yml"
+    settings_path.write_text("", encoding="utf-8")
+
+    result = load_settings_config(settings_path)
+
+    assert result == {}
+
+
+def test_load_settings_config_non_mapping_raises_value_error(tmp_path):
+    settings_path = tmp_path / "list_settings.yml"
+    settings_path.write_text("- a\n- b\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_settings_config(settings_path)
