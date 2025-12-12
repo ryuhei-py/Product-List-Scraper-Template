@@ -1,4 +1,4 @@
-from product_scraper.parser import DetailPageParser, ListPageParser
+from product_scraper.parser import DetailPageParser, ListItemsParser, ListPageParser
 
 
 def test_parse_list_returns_links():
@@ -122,3 +122,58 @@ def test_parse_detail_extracts_extra_fields():
 
     assert data["title"] == "Product with SKU"
     assert data["sku"] == "SKU-123"
+
+
+def test_selector_spec_supports_attr_and_text():
+    html = """
+    <html>
+        <body>
+            <a class="title" title="FULL">Short</a>
+        </body>
+    </html>
+    """
+    parser = DetailPageParser(
+        selectors={
+            "title": "a.title::text",
+            "title_attr": "a.title@title",
+            "title_attr_scrapy": "a.title::attr(title)",
+        }
+    )
+
+    data = parser.parse_detail(html)
+
+    assert data["title"] == "Short"
+    assert data["title_attr"] == "FULL"
+    assert data["title_attr_scrapy"] == "FULL"
+
+
+def test_list_items_parser_parses_multiple_items():
+    html = """
+    <html>
+        <body>
+            <div class="item">
+                <span class="name">First</span>
+                <span class="price">$10</span>
+            </div>
+            <div class="item">
+                <span class="name">Second</span>
+                <span class="price">$20</span>
+            </div>
+        </body>
+    </html>
+    """
+    parser = ListItemsParser(
+        item_selector=".item",
+        field_selectors={
+            "name": ".name",
+            "price": ".price::text",
+        },
+    )
+
+    records = parser.parse_items(html)
+
+    assert len(records) == 2
+    assert records[0]["name"] == "First"
+    assert records[0]["price"] == "$10"
+    assert records[1]["name"] == "Second"
+    assert records[1]["price"] == "$20"

@@ -64,3 +64,21 @@ def test_export_to_json_writes_records(tmp_path):
         data = json.load(f)
 
     assert data == records
+
+
+def test_export_to_csv_union_of_keys(tmp_path):
+    output_path = tmp_path / "hetero.csv"
+    records = [
+        {"a": "1", "b": "2"},
+        {"a": "3", "c": "4"},
+    ]
+
+    export_to_csv(records, output_path)
+
+    with output_path.open(newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+
+    assert rows[0] == ["a", "b", "c"]
+    assert rows[1] == ["1", "2", ""]
+    assert rows[2] == ["3", "", "4"]

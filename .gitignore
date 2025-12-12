@@ -20,6 +20,8 @@ dist/
 
 # Environment variables
 .env
+config/targets.yml
+config/settings.yml
 
 # Editors/IDE
 .vscode/
@@ -31,3 +33,7 @@ Thumbs.db
 
 # Developer note
 dev_note/
+
+# Outputs
+sample_output/*.csv
+!sample_output/*.sample.csv

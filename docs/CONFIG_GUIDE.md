@@ -1,636 +1,164 @@
 # Configuration guide
+This guide explains the configuration model for the Product List Scraper Template. The template is configuration-driven so most adaptations happen in YAML, not Python.
 
-This guide explains how to configure the **Product List Scraper Template** using YAML files.
-
-There are two main configuration files:
-
-- `config/targets.yml` (required) → defines **what** to scrape.
-- `config/settings.yml` (optional) → defines **how** the scraper should run globally (HTTP behavior, validation, logging, etc.).
-
-The goal is to keep the scraper:
-
-- **Declarative** ? most site-specific logic lives in YAML.
-- **Portable** ? no secrets in version control; use `.env` or deployment tooling.
-- **Extensible** ? easy to add more sites, fields, or behaviors without rewriting core code.
+This guide covers:
+- Target configuration (`config/targets*.yml`).
+- Settings configuration (`config/settings*.yml`).
+- Selector specification syntax (text + attributes).
+- Validation rules and common pitfalls.
 
 ---
 
-## Overview
+## Configuration files
+This section distinguishes tracked examples from runtime files.
 
-### Targets vs settings
+### Tracked (portfolio/reference)
+- `config/targets.example.yml`
+- `config/settings.example.yml`
 
-- `targets.yml` answers:  
-  > “Which site (or sites) should we scrape, and which selectors do we use?”
-- `settings.yml` answers:  
-  > “With which HTTP parameters, logging level, and validation rules should we run?”
+### Runtime (recommended, typically gitignored)
+- `config/targets.yml`
+- `config/settings.yml`
 
-The scraper can run with only `targets.yml`. Adding `settings.yml` gives you more control over operational behavior but is **optional**.
+Recommended workflow:
 
-### Environment variables and `.env`
-
-In addition to YAML configuration, environment variables can be used for:
-
-- Proxies (`HTTP_PROXY`, `HTTPS_PROXY`)
-- Authentication tokens
-- Other environment-specific settings (if you extend the code)
-
-If a `.env` file exists in the project root, it is automatically loaded via `python-dotenv`. See `.env.example` for suggested placeholders.
-
----
-
-## Targets configuration (`config/targets.yml`)
-
-`targets.yml` describes the sites (or site variants) that the scraper should process.
-
-### Basic structure
-
-At minimum, `targets.yml` must define a non-empty list under the `targets` key:
-
-```yaml
-targets:
-  - name: example-site
-    list_url: "https://example.com/products"
-    link_selector: "a.product-link"
-    detail_selectors:
-      title: "h1.product-title"
-      price: ".price"
-      image_url: "img.product-image"
-      description: ".description"
-```
-
-Required fields per target:
-
-- `name` (string, recommended)  
-  Logical name of the target (e.g., "example-site"). Used with the `--target-name` CLI flag.
-- `list_url` (string, required)  
-  URL of the product list page to start from.
-- `link_selector` (string, required)  
-  CSS selector for anchors pointing to product detail pages. Example: `"a.product-link"`.
-- `detail_selectors` (mapping, required)  
-  Mapping of field names to CSS selectors evaluated on the detail page.
-
-Minimum recommended fields:
-
-- `title`
-- `price`
-- `image_url`
-- `description`
-
-You may add extra fields as needed (e.g., `sku`, `category`).
-
-The core code validates that:
-
-- `targets` exists and is a non-empty list.
-- Each target is a mapping with non-empty `list_url` and `link_selector`.
-- `detail_selectors` is a mapping (may be empty, but that’s not very useful).
-
-If the config is invalid, the CLI prints a clear error and exits with a non-zero status.
-
-### Multiple targets
-
-You can define multiple targets in a single file:
-
-yaml
-
-
-
-```yaml
-targets:
-  - name: example-site
-    list_url: "https://example.com/products"
-    link_selector: "a.product-link"
-    detail_selectors:
-      title: "h1.product-title"
-      price: ".price"
-      image_url: "img.product-image"
-      description: ".description"
-
-  - name: example-sale
-    list_url: "https://example.com/sale"
-    link_selector: "a.sale-product-link"
-    detail_selectors:
-      title: "h1.product-title"
-      price: ".price"
-      image_url: "img.product-image"
-      description: ".description"
-      badge: ".badge"
-```
-
-At runtime:
-
-- By default, the CLI uses the first target in the list.
-- You can select a specific target using `--target-name`:
-
-
-
+# Create editable runtime configs from examples
 ```bash
-python -m product_scraper.cli \
-  --config config/targets.yml \
-  --output sample_output/products_example.csv \
-  --target-name example-sale
+cp config/targets.example.yml config/targets.yml
+cp config/settings.example.yml config/settings.yml
 ```
 
-This pattern lets you:
+---
 
-- Keep related variants in one file (e.g., regular vs sale pages).
-- Avoid duplicating configurations across separate YAML files.
+## Targets configuration (`config/targets*.yml`)
+This section describes how targets are defined.
 
-### Detail selectors and extra fields
+Targets are defined under a single top-level key: `targets`. Each target must have a `name` (string, non-empty, unique) and `list_url` (string, non-empty). Then you choose one of two modes:
 
-`detail_selectors` is a mapping of logical field names to CSS selectors.
+- List-only mode: parse repeated “item cards” directly from the list page.
+- Detail-follow mode: extract detail links from the list page and scrape fields from each detail page.
+
+### Mode A: list-only targets
+This subsection explains when and how to use list-only mode.
+
+When to use:
+- The list page contains all the fields you need (title/price/image/URL/etc.).
+- You want a fast, reliable pipeline (one request per run in simplest cases).
+- You are building a demo or iterating on selectors quickly.
+
+Required fields:
+- `item_selector`: CSS selector for each repeated item card/container.
+- `item_fields`: mapping of `field_name -> selector_spec`.
+
+Example (working demo target):
+
+```yaml
+targets:
+  - name: laptops-demo
+    list_url: "https://webscraper.io/test-sites/e-commerce/allinone/computers/laptops"
+    item_selector: "div.thumbnail"
+    item_fields:
+      title: "a.title@title"
+      price: "h4.price"
+      description: "p.description"
+      image_url: "img@src"
+      product_url: "a.title@href"
+```
+
+Output notes (list-only):
+- Each parsed record gets `source_list_url` (the list URL used for the run).
+- Any field ending with `*_url` (for example: `image_url`, `product_url`) is normalized to an absolute URL when possible (relative paths are resolved against the list URL).
+
+### Mode B: detail-follow targets
+This subsection explains when and how to use detail-follow mode.
+
+When to use:
+- The list page only contains summary fields.
+- You need richer data from the product detail page (specifications, long descriptions, variants, etc.).
+
+Required fields:
+- `link_selector`: CSS selector for product links on the list page.
+- `detail_selectors`: mapping of `field_name -> selector_spec`.
 
 Example:
 
-yaml
-
-
-
 ```yaml
-detail_selectors:
-  title: "h1.product-title"
-  price: ".price"
-  image_url: "img.product-image"
-  description: ".description"
-  sku: ".sku"
-  category: ".breadcrumb .category"
+targets:
+  - name: my-shop
+    list_url: "https://example.com/products"
+    link_selector: "a.product-link"
+    detail_selectors:
+      title: "h1.product-title"
+      price: ".price"
+      image_url: "img.product-image@src"
+      description: ".description"
 ```
 
-Behavior:
-
-The parser ensures the following core fields always exist in the output dict:
-
-- `title`
-- `price`
-- `image_url`
-- `description`
-
-For each field specified in `detail_selectors`:
-
-- If the selector is missing or empty → the value is `None`.
-- If the element is not found in the HTML → the value is `None`.
-- Otherwise:
-  - For `image_url`, the parser prefers the `src` attribute; if missing, it falls back to element text.
-  - For other fields, the parser uses `element.get_text(strip=True)` and normalizes empty strings to `None`.
-
-Any extra fields (e.g., `sku`, `category`) are included in the output records as additional columns.
-
-This design allows you to add and remove fields without changing code. Only the YAML definition needs to be updated.
-
-### URL patterns and relative URLs
-
-Some sites use:
-
-- Absolute URLs: `https://example.com/product/123`
-- Root-relative URLs: `/product/123`
-- Page-relative URLs: `product/123`, `./product/123`
-
-The scraper:
-
-- Reads raw href attributes from the list page.
-- Normalizes them in the CLI:
-  - If the URL starts with "http" → treated as absolute.
-  - Otherwise → resolved via `urllib.parse.urljoin(list_url, href)`.
-
-This means:
-
-- You can use a single `link_selector` for different URL types.
-- You do not need to adjust for relative vs absolute URLs in configuration.
+Output notes (detail-follow):
+- Each parsed record gets `source_list_url` (the list URL used for the run) and `detail_url` (the resolved absolute URL that was fetched).
+- Any field ending with `*_url` (for example: `image_url`) is normalized to an absolute URL when possible (relative paths are resolved against the detail URL).
 
 ---
 
-## Settings configuration (`config/settings.yml`)
+## Selector spec syntax
+This section defines how selector specs work in `item_fields` and `detail_selectors`.
 
-`settings.yml` provides global operational defaults. It is optional: if absent, the scraper falls back to built-in defaults.
+A selector spec determines how a value is extracted from HTML.
 
-### Example settings.yml
+### Text extraction (default)
+- `"h4.price"`: selects the element and extracts `get_text(strip=True)`.
+- `"a.title::text"`: explicit text mode (equivalent to the above).
+- If the element is not found or the text is empty, the result is treated as missing.
 
-A typical `settings.yml` might look like:
+### Attribute extraction
+Two equivalent syntaxes are supported:
+- `"a.title@title"`: extracts the `title` attribute.
+- `"a.title::attr(title)"`: same meaning (Scrapy-like).
 
-yaml
+Examples:
+- `"img@src"` → `src` attribute.
+- `"a@href"` → `href` attribute.
 
+If the element is not found or the attribute is missing/empty, the result is treated as missing.
 
+---
 
-```yaml
-http:
-  user_agent: "Mozilla/5.0 (compatible; ProductScraper/1.0)"
-  timeout: 10        # seconds
-  max_retries: 3
-  delay_seconds: 1.0 # delay between requests
+## Validation rules for targets
+This section lists enforced validation rules.
 
-validation:
-  enabled: true
+Targets are validated at load time. Common enforced rules:
+- `targets` must be a list.
+- Each target must be a mapping/object.
+- `name` must be present, a non-empty string, and unique.
+- `list_url` must be present and a non-empty string.
+- List-only mode:
+  - `item_selector` must be present and non-empty.
+  - `item_fields` must be present, a non-empty mapping.
+- Detail-follow mode:
+  - `link_selector` must be present and non-empty.
+  - `detail_selectors` must be present, a non-empty mapping.
+- All selector values in `item_fields` / `detail_selectors` must be non-empty strings.
 
-logging:
-  level: "INFO"
+If validation fails, the CLI should exit with a non-zero status and print a clear error message.
 
-output:
-  directory: "sample_output"
-  csv_filename: "products.csv"
-  json_filename: "products.json"
-```
+---
 
-The core CLI uses:
+## Settings configuration (`config/settings*.yml`)
+This section describes operational settings.
 
-- `http.*` to configure the Fetcher.
-- `validation.enabled` to decide whether to run the validation stage.
-- `logging.level` to configure Python’s logging.
+Settings are used to control HTTP behavior, retries, optional backoff, validation behavior, and logging.
 
-The `output.*` section is a recommended schema for organizing your outputs. The default CLI uses the `--output` flag for the CSV path and does not automatically read `output.directory` or `csv_filename` unless you extend the code accordingly.
-
-### HTTP settings (`http`)
-
-The `http` section controls how the Fetcher behaves:
-
-yaml
-
-
+A typical structure:
 
 ```yaml
 http:
   user_agent: "Mozilla/5.0 (compatible; ProductScraper/1.0)"
   timeout: 10
   max_retries: 3
-  delay_seconds: 1.0
-```
-
-- `user_agent` (string, optional)  
-  Sets the User-Agent header for outgoing requests. Default: omission leads to the underlying HTTP library’s default behavior.
-- `timeout` (number, optional)  
-  Request timeout in seconds. Default: 10 seconds (in the template implementation).
-- `max_retries` (integer, optional)  
-  Number of attempts per URL. Default: 3.
-- `delay_seconds` (number, optional)  
-  Fixed delay between requests. Helps to reduce load on the target site and stay polite. Default: 0 (no delay) if not specified.
-
-These values are read by the CLI and used to initialize Fetcher.
-
-### Validation settings (`validation`)
-
-Validation is a lightweight, non-blocking step that summarizes data quality.
-
-yaml
-
-
-
-```yaml
-validation:
-  enabled: true
-```
-
-- `enabled` (boolean, optional)  
-  `true`: run validation and print a data-quality report.  
-  `false`: skip validation entirely.  
-  Default: `true` if `validation` is missing.
-
-The validation report typically includes:
-
-- Total records count.
-- Missing counts per field.
-- Simple notes about completeness.
-
-This is useful in early development and in ongoing operations to monitor data quality over time.
-
-### Logging settings (`logging`)
-
-Logging is configured via `logging` section:
-
-yaml
-
-
-
-```yaml
-logging:
-  level: "INFO"
-```
-
-- `level` (string, optional)  
-  Interpreted as a standard logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.  
-  Default: `INFO` when missing or invalid.
-
-The CLI uses this value to call `logging.basicConfig(level=...)`. Within the code, `logger.info(...)` etc. are used for:
-
-- High-level progress (number of URLs discovered, records exported).
-- Warnings for anomalies (skipped URLs).
-- Errors before exiting.
-
-In scheduled runs, you typically redirect stdout/stderr to log files. The `logging.level` controls how verbose those logs are.
-
-### Output settings (`output`)
-
-The `output` section is advisory: it proposes a convention for where and how to store files:
-
-yaml
-
-
-
-```yaml
-output:
-  directory: "sample_output"
-  csv_filename: "products.csv"
-  json_filename: "products.json"
-```
-
-By default, the CLI:
-
-- Requires an explicit `--output` argument for the CSV path.
-- Does not automatically use these values.
-
-You can:
-
-- Use `output.*` in your own scripts that wrap the CLI.
-- Extend the CLI to:
-  - Use `output.directory` and `csv_filename` as defaults when `--output` is not provided.
-  - Optionally write JSON using `json_filename`.
-
-Keeping `output.*` in `settings.yml` helps centralize deployment-specific decisions (paths, naming conventions).
-
----
-
-## Environment-specific configurations
-
-For real deployments, you may want different configs for:
-
-- Local development
-- Staging
-- Production
-
-### Environment-specific targets
-
-You can maintain separate targets files:
-
-- `config/targets.dev.yml`
-- `config/targets.stage.yml`
-- `config/targets.prod.yml`
-
-And select them via `--config`:
-
-
-
-```bash
-# Development
-python -m product_scraper.cli \
-  --config config/targets.dev.yml \
-  --output data/dev_products.csv
-
-# Production
-python -m product_scraper.cli \
-  --config config/targets.prod.yml \
-  --output data/prod_products.csv
-```
-
-This pattern is useful when:
-
-- Different environments use different domains or URLs.
-- Some targets should only run in non-production environments.
-
-### Environment-specific settings
-
-Similarly for settings:
-
-- `config/settings.dev.yml`
-- `config/settings.prod.yml`
-
-You can:
-
-- Symlink or copy the appropriate file to `config/settings.yml` during deployment.
-- Or pass a configurable path to the CLI if you extend it.
-
-Examples:
-
-- Lower timeouts and fewer retries in development.
-- Longer timeouts and more conservative delays in production.
-
-### Environment variables
-
-Environment variables complement YAML:
-
-- Keep secrets out of Git (tokens, credentials, proxy URLs).
-- Provide runtime overrides independent of YAML.
-
-Typical patterns:
-
-- `HTTP_PROXY`, `HTTPS_PROXY` for network routing.
-- `SCRAPER_ENV` to indicate env (dev/stage/prod) if you extend the code to react to it.
-
-The core template does not hard-code any specific environment variables, but `.env` is loaded automatically, so you can rely on them in custom extensions.
-
----
-
-## Advanced patterns (design suggestions)
-
-The base template intentionally keeps configuration simple. However, the same structure can be extended to more advanced scenarios.
-
-Important: The patterns below are design suggestions. They are not fully wired into the core CLI by default and require additional code to take effect.
-
-### Pagination
-
-For list pages that require pagination, you might extend a target like:
-
-yaml
-
-
-
-```yaml
-targets:
-  - name: example-paged
-    list_url: "https://example.com/products"
-    link_selector: "a.product-link"
-    detail_selectors:
-      title: "h1.product-title"
-      price: ".price"
-      image_url: "img.product-image"
-      description: ".description"
-    pagination:
-      type: "query_param"
-      param: "page"
-      start: 1
-      end: 5
-```
-
-Interpretation (custom logic you can implement):
-
-For `type: "query_param"`:
-
-- The CLI (or a higher-level controller) would generate:
-  - `https://example.com/products?page=1`
-  - `https://example.com/products?page=2`
-  - `...`
-  - `https://example.com/products?page=5`
-- It would then run the list-page parsing step for each page.
-
-Other pagination patterns you could design:
-
-- `type: "path_segment"` ? when page number is part of the URL path.
-- `type: "offset"` ? when an offset parameter is used (e.g., `?start=0&limit=50`).
-
-### Multiple list pages per target
-
-Some sites naturally group content (e.g., categories):
-
-yaml
-
-
-
-```yaml
-targets:
-  - name: multi-list-example
-    list_pages:
-      - url: "https://example.com/products/category/a"
-        link_selector: "a.product-link"
-      - url: "https://example.com/products/category/b"
-        link_selector: "a.product-link"
-    detail_selectors:
-      title: "h1.product-title"
-      price: ".price"
-      image_url: "img.product-image"
-      description: ".description"
-```
-
-Possible logic (if you implement it):
-
-- For each entry in `list_pages`, fetch and parse URLs.
-- Combine all discovered detail URLs into a single set before processing detail pages.
-
-This avoids duplicating entire targets for categories that share the same detail selectors.
-
-### Limits and filters
-
-You might want to express config-driven limits instead of using `--limit` only:
-
-yaml
-
-
-
-```yaml
-targets:
-  - name: limited-example
-    list_url: "https://example.com/products"
-    link_selector: "a.product-link"
-    detail_selectors:
-      title: "h1.product-title"
-      price: ".price"
-      image_url: "img.product-image"
-      description: ".description"
-    limits:
-      max_items: 100
-```
-
-If you implement support for `limits.max_items`, the CLI could:
-
-- Cap the number of detail pages processed regardless of `--limit`.
-- Or treat `--limit` as a temporary override for local debugging.
-
-Configuration-driven limits make operational behavior more predictable and reproducible across environments.
-
----
-
-## Validation and safety
-
-The configuration loader validates essential aspects of `targets.yml`:
-
-- `targets` must be present and non-empty.
-- Each target must be a mapping with:
-  - `list_url`
-  - `link_selector`
-  - `detail_selectors` (mapping)
-
-If validation fails:
-
-- A `ConfigError` is raised.
-- The CLI prints a human-readable message and exits with a non-zero code.
-
-To keep configuration safe and maintainable:
-
-- Prefer explicit keys over magic defaults.
-- Avoid embedding credentials or secrets in YAML; use `.env` or deployment tooling instead.
-- Use comments in YAML to document decisions and selectors.
-
----
-
-## Examples
-
-### Single-site, simple configuration
-
-yaml
-
-
-
-```yaml
-# config/targets.yml
-targets:
-  - name: example-simple
-    list_url: "https://example.com/products"
-    link_selector: "a.product-link"
-    detail_selectors:
-      title: "h1.product-title"
-      price: ".price"
-      image_url: "img.product-image"
-      description: ".description"
-```
-
-Run:
-
-
-
-```bash
-python -m product_scraper.cli \
-  --config config/targets.yml \
-  --output sample_output/products.csv
-```
-
-### Multi-target configuration
-
-yaml
-
-
-
-```yaml
-# config/targets.yml
-targets:
-  - name: example-regular
-    list_url: "https://example.com/products"
-    link_selector: "a.product-link"
-    detail_selectors:
-      title: "h1.product-title"
-      price: ".price"
-      image_url: "img.product-image"
-      description: ".description"
-
-  - name: example-sale
-    list_url: "https://example.com/sale"
-    link_selector: "a.sale-product-link"
-    detail_selectors:
-      title: "h1.product-title"
-      price: ".price"
-      image_url: "img.product-image"
-      description: ".description"
-      badge: ".badge"
-```
-
-Run a specific target:
-
-
-
-```bash
-python -m product_scraper.cli \
-  --config config/targets.yml \
-  --output sample_output/products_sale.csv \
-  --target-name example-sale
-```
-
-### Settings for production-like environment
-
-yaml
-
-
-
-```yaml
-# config/settings.yml
-http:
-  user_agent: "Mozilla/5.0 (compatible; ProductScraper/1.0)"
-  timeout: 15
-  max_retries: 5
-  delay_seconds: 0.5
+  delay_seconds: 0.0
+  retry_backoff_seconds: 0.0
+  retry_backoff_multiplier: 2.0
+  retry_jitter_seconds: 0.0
 
 validation:
   enabled: true
@@ -639,32 +167,40 @@ logging:
   level: "INFO"
 ```
 
-You might also set proxies via `.env`:
+### HTTP / retry behavior (typical expectations)
+- Requests are made with a session (connection reuse).
+- Retries are attempted for retryable cases such as HTTP 429 and HTTP 5xx.
+- Backoff is only applied if `retry_backoff_seconds > 0.0`.
 
-
-
-```bash
-# .env
-HTTPS_PROXY=http://user:pass@proxy.example.com:8080
-```
+### Delay
+- `delay_seconds` is useful for being respectful to target sites and reducing blocking risk.
+- Set small delays during development; adjust per site policy and Terms of Service.
 
 ---
 
-## Summary
+## Common mistakes and how to avoid them
+This section lists typical errors and fixes.
 
-`config/targets.yml` defines what to scrape:
+1) “It runs but returns empty records”  
+   Check that selectors match the site’s HTML, `item_selector` selects the repeated container (list-only mode), `link_selector` selects anchors with `href` (detail-follow mode), and selector specs return non-empty text/attributes. Tip: start with `--dry-run` and a small `--limit` when iterating.
 
-- At least one `targets` entry with `list_url`, `link_selector`, and `detail_selectors`.
-- Optionally, multiple targets and extra fields per detail page.
+2) “Some URL fields are relative”  
+   This is expected from many sites. Name URL-like fields with the suffix `*_url` (for example, `image_url`, `product_url`). The CLI normalizes these to absolute URLs when possible.
 
-`config/settings.yml` defines how to run:
+3) “Config validation fails”  
+   Typical causes: missing required keys for the selected mode, empty selector strings, duplicate name across targets. Fix the YAML and rerun.
 
-- HTTP behavior (`timeout`, `max_retries`, `user_agent`, `delay_seconds`).
-- Validation and logging defaults.
-- Recommended output conventions.
+---
 
-`.env` holds environment-specific secrets and network settings.
+## Where to go next
+This section points to related docs.
 
-Advanced patterns (pagination, multiple list pages, config-driven limits) can be expressed in YAML and then wired into code as needed, without breaking the core template.
+- See `README.md` for end-to-end usage examples and CLI commands.
+- See `docs/architecture.md` for the pipeline and module responsibilities.
+- See `docs/operations.md` for operational guidance (timeouts, retries, logging, troubleshooting).
+- See `docs/testing.md` for test strategy and local development workflow.
+- See `docs/SECURITY_AND_LEGAL.md` for compliance expectations and safe scraping practices.
 
-By keeping configuration explicit, declarative, and environment-aware, this template can be adapted to many scraping projects while remaining understandable to both developers and clients.
+---
+
+_Last updated: 2025-12-12_

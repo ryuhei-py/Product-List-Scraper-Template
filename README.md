@@ -1,377 +1,322 @@
 # Product List Scraper Template
-[![CI](https://github.com/ryuhei-py/Product-List-Scraper-Template/actions/workflows/ci.yml/badge.svg)](https://github.com/ryuhei-py/Product-List-Scraper-Template/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+This document explains the Product List Scraper Template, its use cases, and how to run it as a portfolio-ready, config-driven scraper.
 
-A reusable, configurable product / catalog list scraper template for Python.
-
-This repository is designed as a **portfolio-ready, production-oriented template** that you can quickly adapt for real client projects (e.g., Upwork jobs) by changing configuration files instead of rewriting core code.
+[![CI](https://github.com/ryuhei-py/Product-List-Scraper-Template/actions/workflows/ci.yml/badge.svg)](https://github.com/ryuhei-py/Product-List-Scraper-Template/actions/workflows/ci.yml) ![Python](https://img.shields.io/badge/python-3.11%2B-blue) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
 
-## What is this?
+## Portfolio highlights
+This section lists the key traits of the template.
 
-The Product List Scraper Template is a generic pipeline for:
-
-- Fetching one or more product-list pages from an e-commerce or catalog site
-- Extracting product detail URLs from those list pages
-- Fetching each product detail page
-- Parsing structured fields (title, price, image URL, description, etc.)
-- Exporting the final dataset to CSV (and optionally JSON)
-- Running basic data-quality validation and printing a quality report
-
-It is **not tied to any specific site**. All site-specific details (URLs, selectors, pagination rules, limits, etc.) live in YAML config files.
+- Template-first design: add new targets by editing YAML instead of rewriting code.
+- Two scraping modes: list-only (single request) and detail-follow (list → detail pages).
+- Selector spec support: extract text or attributes via `@attr`, `::attr(name)`, and `::text`.
+- Traceable datasets: records include `source_list_url`, plus `detail_url` in detail-follow mode; `*_url` fields are normalized when possible.
+- Reliable exports: CSV headers are the stable union-of-keys across all records (handles heterogeneous records).
+- Engineering signals: automated tests + linting, CI-ready workflow, and dedicated docs for architecture, ops, testing, and compliance.
 
 ---
 
-## Why use this template?
+## Overview and use cases
+This section describes what the project solves and typical outputs.
 
-Typical scraping projects repeat the same patterns:
+This project solves the “repeatable scraping pipeline” problem: you need to scrape product/catalog data from one or many sites, enforce basic quality rules, and export a dataset in a predictable format.
 
-- HTTP requests with retries and headers
-- List-page parsing to discover item URLs
-- Detail-page parsing for structured fields
-- CSV / JSON exports and basic validation
-- Operational notes (how to run, schedule, and monitor the job)
+Typical use cases:
+- Scrape e-commerce product lists (title/price/image/product URL) into CSV for analysis.
+- Build a client-ready scraper where the only per-client change is the config (selectors + URLs).
+- Prototype a new data source quickly, then harden it with tests and operational settings.
 
-This template:
-
-- Encapsulates those patterns into **well-separated modules**
-- Uses a **config-driven** approach for new sites
-- Comes with tests and documentation
-- Makes your architecture and workflow **visible to clients** (great for portfolios)
-
-You can fork this repository and adapt it to specific scraping jobs by:
-
-- Copying and editing `config/targets.example.yml` into a project-specific `config/targets.yml`
-- Optionally adding a `config/settings.yml` for HTTP, validation, and logging defaults
-- Adjusting selectors and URLs for each site
-- Extending or swapping modules as needed (e.g., new exporters, different fetchers)
+Output:
+- Primary output: CSV.
+- Optional helpers: JSON / Excel (Excel requires optional deps; see “Tech stack” / “Quickstart”).
 
 ---
 
-## Features
+## Architecture at a glance
+This section summarizes the pipeline and modules.
 
-- **Config-driven**:
-  - Site-specific configuration in YAML (`config/targets.yml`, `config/settings.yml`)
-  - No hard-coded selectors in the core logic
-- **Layered architecture**:
-  - `Fetcher` → `ListPageParser` → `DetailPageParser` → `Exporter` → `Validator` → `CLI`
-  - Each layer has a clear responsibility
-- **Multiple output formats**:
-  - CSV (standard)
-  - JSON (optional extension point)
-- **Data validation**:
-  - Per-field missing counts
-  - Human-readable quality report (summary of record counts and missing data)
-- **Operational hooks**:
-  - Optional global settings via `config/settings.yml` (HTTP, validation, logging)
-  - Environment variables loaded from `.env` (e.g., proxies, tokens) if present
-- **CLI ergonomics**:
-  - `--config` to select the YAML config file
-  - `--output` to control the CSV output path
-  - `--limit` to cap the number of detail pages processed
-  - `--dry-run` to exercise the pipeline without writing output
-  - `--target-name` (optional) to select a specific target by name
-- **Tested**:
-  - Pytest-based test suite for core components
-- **Portfolio-ready**:
-  - Clear project structure and documentation suitable for client review
-  - Architecture and operational docs in `docs/`
+Core flow: **Config (targets + settings)** → **Fetch** → **Parse** → **Validate / Quality Report** → **Export**
 
-For more details on components and their interactions, see `docs/architecture.md`.
+Key modules (high-level):
+- `Fetcher`: HTTP GET with retries/session reuse (settings-driven).
+- `Parser(s)`: list-page parsing and field extraction (text/attr selector specs).
+- `Validator`: basic record-quality checks (coverage, required fields, etc.).
+- `Exporter`: CSV (union-of-keys header), plus optional JSON/Excel helpers.
+- `CLI`: orchestrates modes, logging, limits, dry-run, and output.
+
+See: `docs/architecture.md`.
 
 ---
 
-## Quickstart
+## Tech stack
+This section lists languages and tools used.
 
-### Requirements
+- Language: Python 3.11+.
+- Core libraries: `requests`, `beautifulsoup4`, `PyYAML`, `python-dotenv`.
+- Tooling: `pytest`, `ruff`, GitHub Actions (CI).
 
-- Python 3.11+ (3.14 is also supported)
+---
+
+## Quickstart (install and first run)
+This section describes setup and a first dry-run.
+
+### Prerequisites
+This subsection lists required tools.
+
+- Python 3.11+
 - `git`
-- Recommended: a virtual environment (`venv`)
 
-### Clone and set up
+### Install
+This subsection shows installation commands.
 
-From a terminal, clone the repository and create the virtual environment:
-
-
-
+# Clone the repository and create a virtual environment
 ```bash
-git clone https://github.com/ryuhei-py/Product-List-Scraper-Template.git
+git clone <YOUR_REPO_URL>
 cd Product-List-Scraper-Template
 
 python -m venv .venv
 # Windows:
-#   ./.venv/Scripts/activate
-# macOS / Linux:
+#   .\.venv\Scripts\activate
+# macOS/Linux:
 #   source .venv/bin/activate
 
 python -m pip install --upgrade pip
-pip install -r requirements.txt
-
-# Install the package in editable mode so "python -m product_scraper.cli"
-# works from this clone.
 pip install -e .
 ```
 
-### Configure a target site (`config/targets.yml`)
+### Optional (Excel export support)
+This subsection explains how to enable Excel exports.
 
-Copy the example config and adapt it for your site:
-
-
-
+# Install Excel extras
 ```bash
-# from project root
-
-# Windows (PowerShell / cmd)
-copy config/targets.example.yml config/targets.yml
-
-# macOS / Linux
-# cp config/targets.example.yml config/targets.yml
+pip install -e ".[excel]"
 ```
 
-Then edit `config/targets.yml`. A minimal example:
+### First run (copy-paste)
+This subsection shows a first dry-run using the example config.
 
-yaml
+# Run the CLI in dry-run mode with the example target
+```bash
+product-scraper --config config/targets.example.yml --output output/products.csv --dry-run
+```
 
+---
 
+## Configuration (high-level)
+This section explains the configuration layers.
+
+This template is driven by three configuration layers:
+
+1) `.env` (optional): environment-specific values not stored in YAML or Git; start from `.env.example` if needed.
+2) `config/settings.yml` (runtime; typically gitignored): operational controls (timeouts, retries, optional backoff, logging, validation toggles, request delay, etc.). Recommended workflow: copy from `config/settings.example.yml` to `config/settings.yml`; keep `config/settings.yml` out of Git.
+3) `config/targets.yml` (runtime; typically gitignored): defines scraping targets (URLs + selectors), choosing between list-only mode (`item_selector` + `item_fields`) or detail-follow mode (`link_selector` + `detail_selectors`). See `docs/CONFIG_GUIDE.md`.
+
+---
+
+## Usage examples
+This section provides common CLI invocations.
+
+1) Basic run (write CSV)
+
+# Run a full scrape and write output
+```bash
+product-scraper --config config/targets.yml --output output/products.csv
+```
+
+2) Dry-run (no output file)
+
+# Run without writing output
+```bash
+product-scraper --config config/targets.yml --output output/products.csv --dry-run
+```
+
+3) Limit records (fast iteration)
+
+# Run with a limit for quicker testing
+```bash
+product-scraper --config config/targets.yml --output output/products.csv --limit 25
+```
+
+4) Select a target by name (multi-target config)
+
+# Run a specific target
+```bash
+product-scraper --config config/targets.yml --output output/products.csv --target-name laptops-demo
+```
+
+---
+
+## Extensibility and customization
+This section outlines how to adapt the template.
+
+Add a new site/target (recommended path):
+
+1) Copy example configs (runtime files):
+
+# Copy example configs
+```bash
+cp config/targets.example.yml config/targets.yml
+cp config/settings.example.yml config/settings.yml
+```
+
+2) Add a new target entry under `targets:` in `config/targets.yml` and choose a mode:
+
+- Option A: list-only mode (fast + stable). Use when the list page contains all required fields.
 
 ```yaml
 targets:
-  - name: example-site
-    list_url: "https://example.com/products"
+  - name: my-target
+    list_url: "https://example.com/catalog"
+    item_selector: ".product-card"
+    item_fields:
+      title: ".title"
+      price: ".price"
+      image_url: "img@src"
+      product_url: "a@href"
+```
+
+- Option B: detail-follow mode (richer fields). Use when you must visit each product page.
+
+```yaml
+targets:
+  - name: my-target
+    list_url: "https://example.com/catalog"
     link_selector: "a.product-link"
     detail_selectors:
-      title: "h1.product-title"
+      title: "h1"
       price: ".price"
-      image_url: "img.product-image"
+      image_url: "img@src"
       description: ".description"
 ```
 
-`name` is an identifier for the target (used by `--target-name`).
+Update selector specs as needed:
 
-`list_url` is the product list page.
+- Text extraction: `.price` or `.price::text`
+- Attribute extraction: `a@href` or `a::attr(href)`
 
-`link_selector` is a CSS selector for links to product detail pages.
+Add or adjust tests:
 
-`detail_selectors` maps field names to CSS selectors on the detail page.
-
-You can define multiple targets in the `targets` list and select them via `--target-name`. Advanced configuration options (pagination, extra selectors, limits, etc.) are described in `docs/CONFIG_GUIDE.md`.
-
-### Optional: configure global settings (`config/settings.yml`)
-
-Global operational settings (HTTP, validation, logging, etc.) can be configured in `config/settings.yml`.
-
-Start with the example:
-
-
-
-```bash
-# from project root
-
-# Windows
-copy config/settings.example.yml config/settings.yml
-
-# macOS / Linux
-# cp config/settings.example.yml config/settings.yml
-```
-
-Then edit `config/settings.yml`. A typical structure is:
-
-yaml
-
-
-
-```yaml
-http:
-  user_agent: "Mozilla/5.0 (compatible; ProductScraper/1.0)"
-  timeout: 10          # seconds
-  max_retries: 3
-  delay_seconds: 1.0   # delay between requests
-
-output:
-  directory: "sample_output"
-  csv_filename: "products.csv"
-  json_filename: "products.json"  # optional
-
-validation:
-  enabled: true
-
-logging:
-  level: "INFO"  # DEBUG / INFO / WARNING / ERROR
-```
-
-The core CLI uses:
-
-- `http.*` to configure the Fetcher (timeout, retries, headers, delay)
-- `validation.enabled` to decide whether to run and print the validation report
-- `logging.level` to configure Python’s logging level
-
-The `output.*` section shows a recommended schema for organizing output paths; you can extend the CLI or exporter to consume these values if needed. See `docs/CONFIG_GUIDE.md` for details.
-
-### Optional: environment variables (`.env`)
-
-If a `.env` file exists in the project root, environment variables will be loaded before the scraper runs. Typical uses:
-
-- HTTP proxies (`HTTP_PROXY`, `HTTPS_PROXY`)
-- Authentication tokens or other secrets
-- Override-style variables for custom extensions
-
-The template does not require any environment variables by default.
-
-### Run a sample scrape
-
-Run the CLI module with configuration and output paths:
-
-
-
-```bash
-python -m product_scraper.cli \
-  --config config/targets.yml \
-  --output sample_output/products.csv
-```
-
-This will:
-
-- Load `config/targets.yml`
-- Load `config/settings.yml` if present (for HTTP, validation, and logging)
-- Fetch the list page(s)
-- Extract product URLs
-- Fetch and parse product detail pages
-- Export records to `sample_output/products.csv`
-- Run validation and print a quality report to stdout
-
-You can further control the run with:
-
-
-
-```bash
-# Limit the number of products for a quick test
-python -m product_scraper.cli \
-  --config config/targets.yml \
-  --output sample_output/products.csv \
-  --limit 50
-
-# Select a specific target by name (if multiple are defined)
-python -m product_scraper.cli \
-  --config config/targets.yml \
-  --output sample_output/products.csv \
-  --target-name example-site
-
-# Dry run (no CSV is written; useful for debugging selectors)
-python -m product_scraper.cli \
-  --config config/targets.yml \
-  --output sample_output/products.csv \
-  --dry-run
-```
-
-On success, you should see a CSV file under `sample_output/` and a small data-quality report printed to stdout. A non-zero exit code indicates an error (e.g., config issues or fetch failures).
+- Parser behavior: `tests/test_parser.py`
+- Config validation: `tests/test_config.py`
+- CLI behavior: `tests/test_cli.py`
 
 ---
 
-## Configuration overview
+## Quality and reliability (tests / CI)
+This section covers quality checks.
 
-The template uses two main YAML configuration files:
+Run locally:
 
-- `config/targets.yml` (required)  
-  Describes what to scrape:
-  - `targets` list (one or more scraping targets)
-  - For each target:
-    - `name` (identifier)
-    - `list_url`
-    - `link_selector`
-    - `detail_selectors` (field → CSS selector)
-    - Optional advanced fields (pagination, extra selectors, limits, etc.)
-- `config/settings.yml` (optional)  
-  Describes global operational settings:
-  - `http` (timeout, retries, headers, delay)
-  - `validation` (on/off)
-  - `logging` (log level)
-  - `output` (recommended structure for file locations)
+# Lint the code
+```bash
+ruff check src tests
+```
 
-See `docs/CONFIG_GUIDE.md` for full field descriptions and advanced patterns.
+# Run tests
+```bash
+pytest
+```
+
+CI (if enabled) should run `ruff check` and `pytest`. See `docs/testing.md`.
 
 ---
 
-## Project layout
+## Operations and production use
+This section lists operational practices.
 
-text
+- Run via scheduler (cron / Task Scheduler / CI runner) with explicit config paths.
+- Capture logs (stdout + structured logging if enabled).
+- Use `--dry-run` to validate config changes safely.
+- Store outputs outside the repo (for example, `output/`) and version datasets only when intended.
+- See `docs/operations.md`.
 
+---
 
+## Security, legal, and compliance
+This section reminds you of responsibilities.
+
+You are responsible for scraping ethically and lawfully:
+
+- Follow site Terms of Service and applicable laws.
+- Respect rate limits and use polite access patterns.
+- Avoid collecting personal data unless explicitly authorized.
+- See `docs/SECURITY_AND_LEGAL.md`.
+
+---
+
+## Project structure
+This section shows the repository layout.
 
 ```text
-Product-List-Scraper-Template/
-├─ src/
-│  └─ product_scraper/
-│     ├─ __init__.py
-│     ├─ config.py
-│     ├─ fetcher.py
-│     ├─ parser.py
-│     ├─ exporter.py
-│     ├─ validator.py
-│     └─ cli.py
-├─ config/
-│  ├─ targets.example.yml
-│  └─ settings.example.yml
-├─ sample_output/
-│  └─ products.sample.csv
-├─ docs/
-│  ├─ architecture.md
-│  ├─ operations.md
-│  ├─ testing.md
-│  ├─ CONFIG_GUIDE.md
-│  └─ SECURITY_AND_LEGAL.md
-├─ tests/
-│  ├─ conftest.py
-│  ├─ test_fetcher.py
-│  ├─ test_parser.py
-│  ├─ test_exporter.py
-│  └─ test_validator.py
-├─ .github/
-│  └─ workflows/
-│     └─ ci.yml
-├─ .env.example
-├─ .gitignore
-├─ pyproject.toml
-├─ requirements.txt
-├─ LICENSE
-└─ README.md
+.
+├── config/
+│   ├── targets.example.yml
+│   └── settings.example.yml
+├── docs/
+│   ├── architecture.md
+│   ├── operations.md
+│   ├── testing.md
+│   ├── CONFIG_GUIDE.md
+│   └── SECURITY_AND_LEGAL.md
+├── sample_output/
+│   └── products.sample.csv
+├── src/
+│   └── product_scraper/
+│       ├── __init__.py
+│       ├── cli.py
+│       ├── config.py
+│       ├── exporter.py
+│       ├── fetcher.py
+│       ├── parser.py
+│       └── validator.py
+└── tests/
+    ├── test_cli.py
+    ├── test_config.py
+    ├── test_exporter.py
+    ├── test_fetcher.py
+    ├── test_parser.py
+    └── test_validator.py
 ```
 
 ---
 
-## Development and testing
+## Documentation index
+This section links to related docs.
 
-Install development dependencies (already included in `requirements.txt`), then run the test suite:
+- Architecture: `docs/architecture.md`
+- Operations: `docs/operations.md`
+- Testing: `docs/testing.md`
+- Configuration guide: `docs/CONFIG_GUIDE.md`
+- Security / Legal: `docs/SECURITY_AND_LEGAL.md`
 
+---
 
+## Roadmap / possible improvements
+This section lists future ideas.
 
-```bash
-# from project root, with venv activated
-pytest
-```
-
-Run the full test suite:
-
-
-
-```bash
-pytest
-```
-
-If you have `ruff` installed (either globally or in your venv), you can lint the code:
-
-
-
-```bash
-ruff src tests
-```
-
-The CI workflow (`.github/workflows/ci.yml`) runs linting and tests automatically on pushes and pull requests.
+- Pagination support (page discovery + max-pages + cursor-based APIs).
+- Storage adapters (SQLite/Postgres) and incremental “diff” runs.
+- Concurrency controls (bounded parallel detail fetch with politeness).
+- Notifications (Slack/email) and structured run reports.
+- Type checking (mypy) and richer schema validation.
 
 ---
 
 ## License
+This section states the license.
 
-This template is provided under the MIT License. See `LICENSE` for full terms.
+MIT. See `LICENSE`.
+
+---
+
+## Author and contact
+This section lists author information.
+
+Ryuhei (ryuhei-py) – Python engineer focused on compliant scraping, automation, and data pipelines.
+
+GitHub: ryuhei-py
+
+---
+
+_Last updated: 2025-12-12_

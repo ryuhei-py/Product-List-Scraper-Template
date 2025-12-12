@@ -19,7 +19,7 @@ def test_get_success(monkeypatch):
         calls.append((url, timeout, headers))
         return response
 
-    monkeypatch.setattr("product_scraper.fetcher.requests.get", fake_get)
+    monkeypatch.setattr(fetcher.session, "get", fake_get)
 
     result = fetcher.get("https://example.com")
 
@@ -45,7 +45,7 @@ def test_retries_on_5xx_then_succeeds(monkeypatch):
         call_count["count"] += 1
         return next(responses)
 
-    monkeypatch.setattr("product_scraper.fetcher.requests.get", fake_get)
+    monkeypatch.setattr(fetcher.session, "get", fake_get)
 
     result = fetcher.get("https://example.com/retry")
 
@@ -62,7 +62,7 @@ def test_no_retry_on_4xx(monkeypatch):
         calls["count"] += 1
         return response
 
-    monkeypatch.setattr("product_scraper.fetcher.requests.get", fake_get)
+    monkeypatch.setattr(fetcher.session, "get", fake_get)
 
     with pytest.raises(FetchError) as excinfo:
         fetcher.get("https://example.com/missing")
@@ -85,7 +85,7 @@ def test_fetch_error_after_exhausting_retries(monkeypatch):
         calls["count"] += 1
         return next(responses)
 
-    monkeypatch.setattr("product_scraper.fetcher.requests.get", fake_get)
+    monkeypatch.setattr(fetcher.session, "get", fake_get)
 
     with pytest.raises(FetchError) as excinfo:
         fetcher.get("https://example.com/unavailable")

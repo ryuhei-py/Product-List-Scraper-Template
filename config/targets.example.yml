@@ -1,9 +1,10 @@
 targets:
-  - name: example-site
-    list_url: "https://example.com/products"
-    link_selector: "a.product-link"
-    detail_selectors:
-      title: "h1.product-title"
-      price: ".price"
-      image_url: "img.product-image"
-      description: ".description"
+  - name: webscraper-demo-list
+    list_url: "https://webscraper.io/test-sites/e-commerce/allinone/computers/laptops"
+    item_selector: "div.thumbnail"
+    item_fields:
+      title: "a.title@title"
+      price: "h4.price"
+      description: "p.description"
+      image_url: "img@src"
+      product_url: "a.title@href"

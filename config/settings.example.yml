@@ -3,6 +3,9 @@ http:
   timeout: 10        # seconds
   max_retries: 3
   delay_seconds: 1.0 # delay between requests
+  retry_backoff_seconds: 0.0
+  retry_backoff_multiplier: 2.0
+  retry_jitter_seconds: 0.0
 
 output:
   directory: "sample_output"
