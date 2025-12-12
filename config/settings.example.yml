@@ -10,7 +10,6 @@ http:
 output:
   directory: "sample_output"
   csv_filename: "products.csv"
-  json_filename: "products.json"
 
 validation:
   enabled: true

@@ -51,7 +51,7 @@ This section lists each module and its role.
 ### src/product_scraper/cli.py
 This subsection covers orchestration.
 
-- Parse CLI args (`--config`, `--output`, `--limit`, `--target`, `--dry-run`, etc.).
+- Parse CLI args (`--config`, `--output`, `--limit`, `--target-name`, `--dry-run`, etc.).
 - Load `.env` if present.
 - Load settings + targets, validate targets, select target(s).
 - Choose pipeline mode based on target shape:

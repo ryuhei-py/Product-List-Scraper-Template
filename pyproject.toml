@@ -9,7 +9,7 @@ description = "Reusable template for web scraping projects."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
-authors = [{ name = "Ryuhei", email = "you@example.com" }]
+authors = [{ name = "Ryuhei", email = "ryuhei@users.noreply.github.com" }]
 dependencies = [
     "requests",
     "beautifulsoup4",

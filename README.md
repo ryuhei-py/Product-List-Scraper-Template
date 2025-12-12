@@ -109,9 +109,14 @@ pip install -e ".[excel]"
 ### First run (copy-paste)
 This subsection shows a first dry-run using the example config.
 
-# Run the CLI in dry-run mode with the example target
+# Run the CLI in dry-run mode with the example target (explicit output path)
 ```bash
 product-scraper --config config/targets.example.yml --output output/products.csv --dry-run
+```
+
+# Or rely on settings.yml output defaults (directory + csv_filename)
+```bash
+product-scraper --config config/targets.example.yml --dry-run
 ```
 
 ### Demo (offline)

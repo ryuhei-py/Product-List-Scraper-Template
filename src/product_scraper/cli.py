@@ -27,6 +27,30 @@ from product_scraper.validator import format_quality_report, validate_records
 logger = logging.getLogger(__name__)
 
 
+def _resolve_output_path(
+    arg_output: str | None,
+    settings: Mapping[str, Any] | None,
+    fallback: str,
+) -> Path:
+    """
+    Resolve output path using CLI arg first, then settings.output, then fallback.
+    """
+    if arg_output:
+        return Path(arg_output)
+
+    output_settings = (settings or {}).get("output", {}) or {}
+    directory = output_settings.get("directory")
+    csv_filename = output_settings.get("csv_filename")
+
+    if directory or csv_filename:
+        filename = csv_filename or Path(fallback).name
+        if directory:
+            return Path(directory) / filename
+        return Path(filename)
+
+    return Path(fallback)
+
+
 def configure_logging(settings: Mapping[str, Any] | None) -> None:
     """
     Configure basic logging according to settings['logging']['level'].
@@ -155,13 +179,11 @@ def run_pipeline(
             record = detail_parser.parse_detail(detail_html)
             record["detail_url"] = full_url
             record["source_list_url"] = list_url
-            image_url = record.get("image_url")
-            if (
-                isinstance(image_url, str)
-                and image_url
-                and not image_url.lower().startswith("http")
-            ):
-                record["image_url"] = urljoin(full_url, image_url)
+            for key, value in list(record.items()):
+                if not key.endswith("_url"):
+                    continue
+                if isinstance(value, str) and value:
+                    record[key] = urljoin(full_url, value)
             records.append(record)
             if delay_seconds > 0:
                 time.sleep(delay_seconds)
@@ -173,6 +195,16 @@ def run_pipeline(
         return 1
 
     # 4) Export to CSV (unless dry-run)
+    validation_settings = (settings or {}).get("validation", {}) or {}
+    validation_enabled = bool(validation_settings.get("enabled", True))
+
+    if validation_enabled:
+        summary = validate_records(records)
+        report = format_quality_report(summary)
+        print(report)
+    else:
+        logger.info("Validation disabled; skipping quality report.")
+
     if not dry_run:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         export_to_csv(records, output_path)
@@ -184,18 +216,6 @@ def run_pipeline(
             len(records),
             records[0] if records else {},
         )
-        return 0
-
-    # 5) Validate and print quality report
-    validation_settings = (settings or {}).get("validation", {}) or {}
-    validation_enabled = bool(validation_settings.get("enabled", True))
-
-    if validation_enabled:
-        summary = validate_records(records)
-        report = format_quality_report(summary)
-        print(report)
-    else:
-        logger.info("Validation disabled; skipping quality report.")
 
     return 0
 
@@ -207,10 +227,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="config/targets.example.yml",
         help="Path to YAML configuration file.",
     )
-    default_output = "sample_output/products.csv"
     parser.add_argument(
         "--output",
-        default=default_output,
+        default=None,
         help="Path to output CSV file.",
     )
     parser.add_argument(
@@ -241,6 +260,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.demo:
         repo_root = Path(__file__).resolve().parent.parent.parent
         fixtures_dir = repo_root / "fixtures"
+        output_default = "sample_output/products.demo.csv"
+        settings: Mapping[str, Any] | None = {}
         demo_target = {
             "name": "demo",
             "list_url": (fixtures_dir / "list.html").as_uri(),
@@ -252,11 +273,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "description": ".description",
             },
         }
-        settings: Mapping[str, Any] | None = {}
-        output_default = "sample_output/products.demo.csv"
-        output_path = Path(
-            args.output if args.output != default_output else output_default
-        )
+        output_path = _resolve_output_path(args.output, settings, output_default)
         configure_logging(settings)
         return run_pipeline(
             target_config=demo_target,
@@ -298,7 +315,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     configure_logging(settings)
-    output_path = Path(args.output)
+    output_path = _resolve_output_path(
+        args.output,
+        settings,
+        fallback="sample_output/products.csv",
+    )
 
     return run_pipeline(
         target_config=target,

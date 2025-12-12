@@ -147,6 +147,7 @@ If validation fails, the CLI should exit with a non-zero status and print a clea
 This section describes operational settings.
 
 Settings are used to control HTTP behavior, retries, optional backoff, validation behavior, and logging.
+They can also supply default output paths when `--output` is omitted on the CLI.
 
 A typical structure:
 
@@ -165,7 +166,16 @@ validation:
 
 logging:
   level: "INFO"
+
+output:
+  directory: "sample_output"
+  csv_filename: "products.csv"
 ```
+
+### Output path precedence
+- CLI flag `--output` always wins when provided.
+- If `--output` is omitted, the CLI uses `output.directory` + `output.csv_filename` from settings.
+- If both are missing, the fallback is `sample_output/products.csv`.
 
 ### HTTP / retry behavior (typical expectations)
 - Requests are made with a session (connection reuse).

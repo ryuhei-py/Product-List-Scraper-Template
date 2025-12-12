@@ -77,10 +77,8 @@ If multiple targets exist in the YAML.
 
 # Run a specific target
 ```bash
-product-scraper --config config/targets.yml --output output/products.csv --target laptops-demo
+product-scraper --config config/targets.yml --output output/products.csv --target-name laptops-demo
 ```
-
-If your CLI uses `--target-name` instead of `--target`, use the flag your implementation provides.
 
 ---
 
