@@ -6,6 +6,9 @@ import random
 import time
 
 import requests
+from urllib.parse import urlparse
+from urllib.request import url2pathname
+from pathlib import Path
 
 
 class FetchError(Exception):
@@ -38,7 +41,9 @@ class Fetcher:
     def _sleep_backoff(self, attempt: int) -> None:
         if self.retry_backoff_seconds <= 0:
             return
-        backoff = self.retry_backoff_seconds * (self.retry_backoff_multiplier ** (attempt - 1))
+        backoff = self.retry_backoff_seconds * (
+            self.retry_backoff_multiplier ** (attempt - 1)
+        )
         if self.retry_jitter_seconds > 0:
             backoff += random.uniform(0, self.retry_jitter_seconds)
         time.sleep(backoff)
@@ -77,3 +82,30 @@ class Fetcher:
             return response.text
 
         raise FetchError(f"Failed to fetch {url}: received status {last_status}")
+
+
+class FileFetcher:
+    """Fetcher variant that reads local files for demo or offline mode."""
+
+    def __init__(
+        self,
+        timeout: float = 10.0,
+        max_retries: int = 1,
+        headers: dict | None = None,
+        **_: object,
+    ) -> None:
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.headers = headers.copy() if headers else {}
+
+    def get(self, url: str) -> str:
+        if url.startswith("file://"):
+            parsed = urlparse(url)
+            path = Path(url2pathname(parsed.path))
+        else:
+            path = Path(url)
+
+        if not path.exists():
+            raise FetchError(f"Failed to fetch {url}: file not found")
+
+        return path.read_text(encoding="utf-8")

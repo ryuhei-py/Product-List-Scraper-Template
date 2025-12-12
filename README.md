@@ -6,14 +6,15 @@ This document explains the Product List Scraper Template, its use cases, and how
 ---
 
 ## Portfolio highlights
-This section lists the key traits of the template.
+This section surfaces quick proof points for clients and hiring managers.
 
-- Template-first design: add new targets by editing YAML instead of rewriting code.
-- Two scraping modes: list-only (single request) and detail-follow (list → detail pages).
-- Selector spec support: extract text or attributes via `@attr`, `::attr(name)`, and `::text`.
-- Traceable datasets: records include `source_list_url`, plus `detail_url` in detail-follow mode; `*_url` fields are normalized when possible.
-- Reliable exports: CSV headers are the stable union-of-keys across all records (handles heterogeneous records).
-- Engineering signals: automated tests + linting, CI-ready workflow, and dedicated docs for architecture, ops, testing, and compliance.
+- Config-driven: new targets via YAML (list-only or detail-follow) with selector-spec text/attr extraction.
+- Layered architecture: Fetcher, Parsers, Exporter, Validator, CLI; clean separation and testable boundaries.
+- Validation and traceability: `source_list_url`/`detail_url`, `*_url` normalization, and quality reporting.
+- CI and tests: pytest + Ruff linting; GitHub Actions workflow ready to run.
+- Extensible: optional Excel export, reusable parser/extractor, and union-of-keys CSV for heterogeneous data.
+- Compliance-aware posture: delays/retries/backoff knobs and clear guidance in docs.
+
 
 ---
 
@@ -58,6 +59,18 @@ This section lists languages and tools used.
 
 ---
 
+## Example output
+This section shows a representative CSV snippet (see `sample_output/products.sample.csv` and `sample_output/products.demo.csv`).
+
+```csv
+title,price,image_url,product_url,source_list_url,detail_url
+Product One,$10.00,https://example.com/img1.jpg,https://example.com/p1,https://webscraper.io/test-sites/e-commerce/allinone/computers/laptops,
+Product Two,$20.00,https://example.com/img2.jpg,https://example.com/p2,https://webscraper.io/test-sites/e-commerce/allinone/computers/laptops,
+Demo Item,$9.99,file:///fixtures/images/product1.jpg,file:///fixtures/detail_1.html,file:///fixtures/list.html,file:///fixtures/detail_1.html
+```
+
+---
+
 ## Quickstart (install and first run)
 This section describes setup and a first dry-run.
 
@@ -82,7 +95,7 @@ python -m venv .venv
 #   source .venv/bin/activate
 
 python -m pip install --upgrade pip
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 ### Optional (Excel export support)
@@ -99,6 +112,27 @@ This subsection shows a first dry-run using the example config.
 # Run the CLI in dry-run mode with the example target
 ```bash
 product-scraper --config config/targets.example.yml --output output/products.csv --dry-run
+```
+
+### Demo (offline)
+This subsection shows an offline demo that uses bundled fixtures.
+
+# Run the offline demo with bundled HTML (no network needed)
+```bash
+python -m product_scraper.cli --demo --output sample_output/products.demo.csv
+```
+
+### Validate the setup (lint and tests)
+This subsection verifies the environment with linting and tests.
+
+# Lint the code
+```bash
+ruff check src tests
+```
+
+# Run the test suite
+```bash
+pytest
 ```
 
 ---
@@ -147,59 +181,21 @@ product-scraper --config config/targets.yml --output output/products.csv --targe
 
 ---
 
-## Extensibility and customization
-This section outlines how to adapt the template.
+## Extensibility
+This section gives a five-step guide to add a new target.
 
-Add a new site/target (recommended path):
-
-1) Copy example configs (runtime files):
-
-# Copy example configs
+1) Copy example configs to runtime files:
 ```bash
 cp config/targets.example.yml config/targets.yml
 cp config/settings.example.yml config/settings.yml
 ```
-
-2) Add a new target entry under `targets:` in `config/targets.yml` and choose a mode:
-
-- Option A: list-only mode (fast + stable). Use when the list page contains all required fields.
-
-```yaml
-targets:
-  - name: my-target
-    list_url: "https://example.com/catalog"
-    item_selector: ".product-card"
-    item_fields:
-      title: ".title"
-      price: ".price"
-      image_url: "img@src"
-      product_url: "a@href"
+2) Add a target under `targets:` with either list-only (`item_selector` + `item_fields`) or detail-follow (`link_selector` + `detail_selectors`) selectors.
+3) Run a dry-run with a small limit to verify selectors:
+```bash
+product-scraper --config config/targets.yml --output output/products.csv --limit 10 --dry-run
 ```
-
-- Option B: detail-follow mode (richer fields). Use when you must visit each product page.
-
-```yaml
-targets:
-  - name: my-target
-    list_url: "https://example.com/catalog"
-    link_selector: "a.product-link"
-    detail_selectors:
-      title: "h1"
-      price: ".price"
-      image_url: "img@src"
-      description: ".description"
-```
-
-Update selector specs as needed:
-
-- Text extraction: `.price` or `.price::text`
-- Attribute extraction: `a@href` or `a::attr(href)`
-
-Add or adjust tests:
-
-- Parser behavior: `tests/test_parser.py`
-- Config validation: `tests/test_config.py`
-- CLI behavior: `tests/test_cli.py`
+4) Check the validation report and sample records (`*_url` normalization, required fields present).
+5) Run the full export (remove `--dry-run` and adjust `--output` as needed).
 
 ---
 

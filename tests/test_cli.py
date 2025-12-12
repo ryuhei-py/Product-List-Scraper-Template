@@ -2,6 +2,7 @@ from pathlib import Path
 
 from product_scraper.cli import run_pipeline
 from product_scraper.fetcher import FetchError
+from product_scraper.fetcher import FileFetcher as CLIFileFetcher
 
 
 def test_run_pipeline_smoke(monkeypatch, tmp_path):
@@ -70,6 +71,39 @@ def test_run_pipeline_smoke(monkeypatch, tmp_path):
     assert exit_code == 0
     assert output_path.exists()
     assert output_path.stat().st_size > 0
+
+
+def test_demo_mode_writes_csv(monkeypatch, tmp_path):
+    fixtures_dir = Path(__file__).resolve().parent.parent / "fixtures"
+
+    target_config = {
+        "name": "demo",
+        "list_url": (fixtures_dir / "list.html").as_uri(),
+        "link_selector": "a.product-link",
+        "detail_selectors": {
+            "title": "h1.product-title",
+            "price": ".price",
+            "image_url": "img.product-image",
+            "description": ".description",
+        },
+    }
+
+    output_path = tmp_path / "demo.csv"
+
+    exit_code = run_pipeline(
+        target_config=target_config,
+        output_path=output_path,
+        dry_run=False,
+        settings=None,
+        fetcher_class=CLIFileFetcher,
+    )
+
+    assert exit_code == 0
+    assert output_path.exists()
+    with output_path.open(encoding="utf-8") as f:
+        lines = f.read().strip().splitlines()
+    # header + 2 detail rows
+    assert len(lines) == 3
 
 
 def test_run_pipeline_list_only_dry_run(monkeypatch, tmp_path, capsys):
