@@ -1,6 +1,10 @@
 import pytest
 
-from product_scraper.config import ConfigError, get_targets_from_config, load_settings_config
+from product_scraper.config import (
+    ConfigError,
+    get_targets_from_config,
+    load_settings_config,
+)
 
 
 def test_get_targets_from_config_valid():

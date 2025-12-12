@@ -145,6 +145,65 @@ Backoff knobs (optional):
 
 ---
 
+## Rate limiting
+This section explains pacing controls for politeness and stability.
+
+- `http.delay_seconds` adds a fixed delay between detail fetches; increase for sensitive targets.
+- Use `--limit` for small, safe test runs before full-volume jobs.
+- Avoid parallel execution of multiple jobs against the same target to reduce block risk.
+
+---
+
+## Retries and backoff
+This section summarizes retry behavior.
+
+- Retryable statuses: 429 and 5xx are retried; other 4xx are treated as fatal.
+- Controls in `config/settings.yml` under `http`:
+  - `max_retries`
+  - `retry_backoff_seconds`
+  - `retry_backoff_multiplier`
+  - `retry_jitter_seconds`
+- Keep backoff at 0.0 for local iteration; enable controlled backoff for production if transient errors appear.
+
+---
+
+## Timeouts
+This section clarifies timeout behavior.
+
+- `http.timeout` sets per-request timeout (seconds); default is 10.
+- Use finite timeouts (for example, 10–30 seconds) to avoid hanging runs.
+- Combine with retries/backoff to balance resilience and run time.
+
+---
+
+## User-Agent
+This section covers User-Agent configuration.
+
+- Set `http.user_agent` to a descriptive string (default provided).
+- Use client-approved identifiers where required; avoid spoofing forbidden headers.
+
+---
+
+## Logging levels
+This section outlines logging guidance.
+
+- `logging.level` controls verbosity (for example, `INFO`, `DEBUG`).
+- Recommended:
+  - `INFO` for scheduled or client-facing runs.
+  - `DEBUG` temporarily when iterating on selectors.
+- Capture logs to files in unattended runs (cron/Task Scheduler/CI) for auditability.
+
+---
+
+## Exit codes
+This section explains CLI exit behavior.
+
+- Exit code `0`: success.
+- Non-zero: configuration validation failures, fatal fetch errors, or unexpected exceptions.
+- In schedulers/CI, treat non-zero as failure and review logs.
+
+---
+
 ## Validation and quality reporting
 This section explains validation controls.
 

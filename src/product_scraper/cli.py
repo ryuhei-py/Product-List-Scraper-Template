@@ -19,7 +19,7 @@ from product_scraper.config import (
     load_targets_config,
 )
 from product_scraper.exporter import export_to_csv
-from product_scraper.fetcher import FetchError, Fetcher
+from product_scraper.fetcher import FetchError, Fetcher, FileFetcher
 from product_scraper.parser import DetailPageParser, ListItemsParser, ListPageParser
 from product_scraper.validator import format_quality_report, validate_records
 
@@ -46,6 +46,7 @@ def run_pipeline(
     limit: int | None = None,
     dry_run: bool = False,
     settings: Mapping[str, Any] | None = None,
+    fetcher_class: type[Fetcher] | None = None,
 ) -> int:
     """Run the scraping pipeline for a single target config."""
     list_url = target_config.get("list_url")
@@ -76,18 +77,29 @@ def run_pipeline(
     max_retries = int(http_settings.get("max_retries", 3))
     user_agent = http_settings.get("user_agent")
     delay_seconds = float(http_settings.get("delay_seconds", 0.0))
+    retry_backoff_seconds = float(http_settings.get("retry_backoff_seconds", 0.0))
+    retry_backoff_multiplier = float(http_settings.get("retry_backoff_multiplier", 2.0))
+    retry_jitter_seconds = float(http_settings.get("retry_jitter_seconds", 0.0))
 
     headers: dict[str, str] = {}
     if user_agent:
         headers["User-Agent"] = str(user_agent)
 
-    fetcher = Fetcher(
+    fetcher_cls = fetcher_class or Fetcher
+    fetcher = fetcher_cls(
         timeout=timeout,
         max_retries=max_retries,
         headers=headers or None,
+        retry_backoff_seconds=retry_backoff_seconds,
+        retry_backoff_multiplier=retry_backoff_multiplier,
+        retry_jitter_seconds=retry_jitter_seconds,
     )
-    list_parser = ListPageParser(link_selector=link_selector) if not list_only_mode else None
-    detail_parser = DetailPageParser(selectors=detail_selectors) if not list_only_mode else None
+    list_parser = (
+        ListPageParser(link_selector=link_selector) if not list_only_mode else None
+    )
+    detail_parser = (
+        DetailPageParser(selectors=detail_selectors) if not list_only_mode else None
+    )
     list_items_parser = (
         ListItemsParser(item_selector=item_selector, field_selectors=item_fields)
         if list_only_mode
@@ -144,7 +156,11 @@ def run_pipeline(
             record["detail_url"] = full_url
             record["source_list_url"] = list_url
             image_url = record.get("image_url")
-            if isinstance(image_url, str) and image_url and not image_url.lower().startswith("http"):
+            if (
+                isinstance(image_url, str)
+                and image_url
+                and not image_url.lower().startswith("http")
+            ):
                 record["image_url"] = urljoin(full_url, image_url)
             records.append(record)
             if delay_seconds > 0:
@@ -163,7 +179,11 @@ def run_pipeline(
         logger.info("Wrote CSV to %s", output_path)
     else:
         logger.info("Dry run enabled; skipping export.")
-        logger.info("Parsed %s records (sample: %s)", len(records), records[0] if records else {})
+        logger.info(
+            "Parsed %s records (sample: %s)",
+            len(records),
+            records[0] if records else {},
+        )
         return 0
 
     # 5) Validate and print quality report
@@ -187,9 +207,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="config/targets.example.yml",
         help="Path to YAML configuration file.",
     )
+    default_output = "sample_output/products.csv"
     parser.add_argument(
         "--output",
-        default="sample_output/products.csv",
+        default=default_output,
         help="Path to output CSV file.",
     )
     parser.add_argument(
@@ -207,10 +228,44 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--target-name",
         help="Optional name of the target in the config to run. If omitted, the first target is used.",
     )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Run in offline demo mode using bundled HTML fixtures.",
+    )
 
     args = parser.parse_args(argv)
 
     load_dotenv()
+
+    if args.demo:
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        fixtures_dir = repo_root / "fixtures"
+        demo_target = {
+            "name": "demo",
+            "list_url": (fixtures_dir / "list.html").as_uri(),
+            "link_selector": "a.product-link",
+            "detail_selectors": {
+                "title": "h1.product-title",
+                "price": ".price",
+                "image_url": "img.product-image",
+                "description": ".description",
+            },
+        }
+        settings: Mapping[str, Any] | None = {}
+        output_default = "sample_output/products.demo.csv"
+        output_path = Path(
+            args.output if args.output != default_output else output_default
+        )
+        configure_logging(settings)
+        return run_pipeline(
+            target_config=demo_target,
+            output_path=output_path,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            settings=settings,
+            fetcher_class=FileFetcher,
+        )
 
     try:
         config = load_targets_config(args.config)
@@ -228,7 +283,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if target_name:
         matches = [t for t in targets if t.get("name") == target_name]
         if not matches:
-            print(f"No target with name '{target_name}' found in config.", file=sys.stderr)
+            print(
+                f"No target with name '{target_name}' found in config.", file=sys.stderr
+            )
             return 1
         target = matches[0]
     else:

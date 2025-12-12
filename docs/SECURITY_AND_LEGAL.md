@@ -23,6 +23,17 @@ This section lists non-negotiable principles.
 
 ---
 
+## Responsible use checklist
+This section lists quick checks before running or delivering.
+
+- Review `robots.txt` and ToS; proceed only if permitted/authorized.
+- Confirm lawful basis/consent for any personal data; prefer non-personal data.
+- Throttle appropriately (`delay_seconds`, retries/backoff) to avoid overload.
+- Use a descriptive User-Agent and client-approved headers.
+- Keep outputs and secrets controlled: gitignore runtime configs, avoid logging sensitive data, store CSVs in approved locations.
+
+---
+
 ## Legal considerations
 This section covers common legal factors.
 
