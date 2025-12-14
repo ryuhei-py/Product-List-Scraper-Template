@@ -1,5 +1,9 @@
 # Product-List-Scraper-Template
 
+[![CI](https://github.com/ryuhei-py/Product-List-Scraper-Template/actions/workflows/ci.yml/badge.svg)](https://github.com/ryuhei-py/Product-List-Scraper-Template/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 A config-driven Python web scraping template for extracting product data from:
 - **Listing pages only** (list-only mode), or
 - **Listing pages + product detail pages** (list → detail mode)
