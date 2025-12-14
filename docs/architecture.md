@@ -1,245 +1,613 @@
 # Architecture
-This document explains the internal architecture of the Product List Scraper Template: how configuration is loaded, how pages are fetched and parsed, how records are normalized and validated, and how output is produced.
 
-The design goals are:
-- Config-driven reuse: adapt to new sites by editing YAML.
-- Two-mode scraping: list-only (single-page extraction) and detail-follow (list → detail pages).
-- Operational reliability: retries for transient failures, optional backoff knobs, structured logging.
-- Traceability: records carry source URLs (`source_list_url`, `detail_url`).
-- Data robustness: CSV export uses a stable union-of-keys across records.
+This document explains the architecture of **Product-List-Scraper-Template**: its execution modes, core modules, configuration contracts, data flow, reliability controls, and extension points. The goal is to make the codebase easy to understand, verify, and adapt to new targets with minimal changes.
 
 ---
 
-## High-level pipeline
-This section describes the runtime flow and modes.
+## Purpose and scope
 
-At runtime, the CLI loads:
-1) Targets config (`config/targets.yml` or `config/targets.example.yml`).
-2) Settings config (`config/settings.yml` or `config/settings.example.yml`).
-3) Runs the pipeline for a selected target.
+### What this repository provides
+A reusable, config-driven scraping template that extracts product data from:
+- a **list page** (list-only mode), or
+- a **list page + linked detail pages** (detail-follow mode),
 
-Two target modes determine which parser path is used:
-- List-only mode: parse repeated item cards directly from the list page.
-- Detail-follow mode: extract detail links from list page, then parse each detail page.
+and produces a consistent, traceable dataset (CSV via CLI).
 
-### Flow diagram
-This subsection visualizes the data flow.
+### What this document covers
+- System overview and design goals
+- Component boundaries and responsibilities
+- End-to-end data flow in both execution modes
+- Configuration schema and validation rules
+- Data contract (record shape, traceability, URL normalization)
+- Error handling and exit behavior
+- Reliability/politeness controls (timeouts, attempts, backoff, delays)
+- Testing/CI strategy (deterministic, no live network calls)
+- Extensibility roadmap (what to add next and where)
+
+### Non-goals (explicit boundaries)
+- **JavaScript-rendered scraping** (no Playwright/Selenium browser automation)
+- **Built-in pagination** (single list URL per run unless extended)
+- **Authentication/session orchestration** (cookies/login flows not implemented)
+- **Anti-bot bypass techniques** (no fingerprinting, CAPTCHA solving, evasion tooling)
+- **Multi-format CLI export** (CLI exports CSV; JSON/Excel helpers exist but are not wired to CLI flags)
+
+---
+
+## System overview
+
+### High-level design goals
+1. **Config-first adaptation**  
+   New targets should be added primarily through YAML selectors, not code rewrites.
+
+2. **Deterministic, portfolio-grade verification**  
+   Tests and demo runs should not rely on live network calls, making results reproducible.
+
+3. **Operational safety knobs**  
+   Provide tunable settings for timeout, attempts, retry backoff/jitter, politeness delays, and user-agent.
+
+4. **Traceability and correctness signals**  
+   Each record should preserve where it came from, and runs should surface quality signals (missing-field counts).
+
+### Key capabilities
+- Two scraping modes:
+  - **Mode A: List-only**
+  - **Mode B: Detail-follow**
+- Selector spec that supports:
+  - text extraction (default / `::text`)
+  - attribute extraction (`@attr` / `::attr(attr)`)
+- URL normalization convention for keys ending in `*_url`
+- Optional validation and a quality report (missing field counts)
+- CSV export with a stable union-of-keys header strategy
+- Offline demo mode using HTML fixtures (`--demo`)
+
+---
+
+## Architecture at a glance
+
+### Component diagram
+```mermaid
+flowchart TB
+  CLI[cli.py<br/>CLI / Orchestrator]
+  CFG[config.py<br/>YAML loading & validation]
+  FCH[fetcher.py<br/>HTTP fetch + retry/backoff<br/>FileFetcher for demo]
+  PAR[parser.py<br/>Selector spec + parsers]
+  VAL[validator.py<br/>Quality summary/report]
+  EXP[exporter.py<br/>Export helpers]
+
+  CLI --> CFG
+  CLI --> FCH
+  CLI --> PAR
+  CLI --> VAL
+  CLI --> EXP
+````
+
+### Execution modes
+
+* **Mode A: List-only**
+
+  * Fetch `list_url` once
+  * Parse repeated item blocks via `item_selector`
+  * Extract fields per item via `item_fields`
+
+* **Mode B: Detail-follow**
+
+  * Fetch `list_url`
+  * Extract product links via `link_selector`
+  * Fetch each detail page URL
+  * Extract fields via `detail_selectors` (plus stable “core fields”)
+
+---
+
+## End-to-end data flow
+
+### Mode A: List-only pipeline
 
 ```mermaid
-flowchart TD
-  A[CLI] --> B[Load settings.yml (optional)]
-  A --> C[Load targets.yml]
-  C --> D{Validate + Select target}
-  D -->|List-only| E[Fetch list_url]
-  D -->|Detail-follow| F[Fetch list_url]
-  E --> G[ListItemsParser: parse_items]
-  F --> H[ListPageParser: parse_links]
-  H --> I[Fetch each detail_url]
-  I --> J[DetailPageParser: parse_detail]
-  G --> K[Normalize *_url fields]
-  J --> K[Normalize *_url fields]
-  K --> L[Add trace fields: source_list_url / detail_url]
-  L --> M[Optional validation + quality report]
-  M --> N[Export: CSV (union-of-keys), JSON, Excel]
+flowchart LR
+  A[Load .env (optional)] --> B[Load targets YAML]
+  B --> C[Validate targets schema]
+  C --> D[Load settings YAML (optional)]
+  D --> E[Configure logging]
+  E --> F[Resolve output path]
+  F --> G[Fetch list_url]
+  G --> H[Parse items from item_selector]
+  H --> I[Extract item_fields per item]
+  I --> J[Add source_list_url]
+  J --> K[Normalize *_url (base=list_url)]
+  K --> L[Quality report (optional)]
+  L --> M{dry-run?}
+  M -- No --> N[Export CSV]
+  M -- Yes --> O[Skip export]
+```
+
+### Mode B: Detail-follow pipeline
+
+```mermaid
+flowchart LR
+  A[Load .env (optional)] --> B[Load targets YAML]
+  B --> C[Validate targets schema]
+  C --> D[Load settings YAML (optional)]
+  D --> E[Configure logging]
+  E --> F[Resolve output path]
+  F --> G[Fetch list_url]
+  G --> H[Extract hrefs via link_selector]
+  H --> I[Resolve hrefs to absolute URLs]
+  I --> J[Loop: fetch each detail_url]
+  J --> K[Parse detail fields via detail_selectors]
+  K --> L[Add detail_url + source_list_url]
+  L --> M[Normalize *_url (base=detail_url)]
+  M --> N[Delay between detail requests (optional)]
+  N --> O[Quality report (optional)]
+  O --> P{dry-run?}
+  P -- No --> Q[Export CSV]
+  P -- Yes --> R[Skip export]
 ```
 
 ---
 
 ## Core modules and responsibilities
-This section lists each module and its role.
 
-### src/product_scraper/cli.py
-This subsection covers orchestration.
+### `src/product_scraper/cli.py` — Orchestrator
 
-- Parse CLI args (`--config`, `--output`, `--limit`, `--target-name`, `--dry-run`, etc.).
-- Load `.env` if present.
-- Load settings + targets, validate targets, select target(s).
-- Choose pipeline mode based on target shape:
-  - List-only: `item_selector` + `item_fields`.
-  - Detail-follow: `link_selector` + `detail_selectors`.
-- Normalize URL-like fields (`*_url`) to absolute URLs when possible.
-- Add traceability fields (`source_list_url`, and `detail_url` for detail-follow).
-- Call exporter to write output (unless `--dry-run`).
+Responsibilities:
 
-### src/product_scraper/config.py
-This subsection covers configuration parsing.
+* Defines the CLI interface:
 
-- Loads YAML safely.
-- Validates target schema: name required, non-empty, unique; list_url required.
-- Enforces either list-only mode requirements or detail-follow mode requirements.
-- Raises `ConfigError` for actionable error messages.
+  * `--config`, `--output`, `--limit`, `--dry-run`, `--target-name`, `--demo`
+* Loads `.env` via `load_dotenv()` (supports standard proxy env vars)
+* Loads and validates targets configuration
+* Loads optional settings from `config/settings.yml`
+* Configures logging from settings
+* Resolves the output path with a strict precedence
+* Executes the pipeline and returns a numeric exit code
 
-### src/product_scraper/fetcher.py
-This subsection describes HTTP fetching.
+Key implementation details:
 
-- Uses a session for connection reuse.
-- Applies timeout, headers (for example, User-Agent), and retry policy.
-- Retry policy: retry on HTTP 429 and HTTP 5xx; do not retry on other 4xx by default.
-- Optional backoff knobs: `retry_backoff_seconds`, `retry_backoff_multiplier`, `retry_jitter_seconds`.
-- Emits `FetchError` with status and URL context.
-
-### src/product_scraper/parser.py
-This subsection explains HTML parsing.
-
-- `ListPageParser` (detail-follow mode): extracts detail page links from list HTML using `link_selector`.
-- `DetailPageParser` (detail-follow mode): extracts fields from a detail page using `detail_selectors` mapping.
-- `ListItemsParser` (list-only mode): extracts repeated item records from a list page using `item_selector` for cards and `item_fields` mapping for per-item extraction.
-- Selector extraction supports a selector-spec syntax described below.
-
-### src/product_scraper/validator.py
-This subsection covers validation.
-
-- Record-level validation and quality reporting.
-- Checks field coverage (missing/empty counts) and produces a summary.
-- Can be toggled via settings (for example, `validation.enabled`).
-
-### src/product_scraper/exporter.py
-This subsection describes output serialization.
-
-- CSV export: computes headers as a stable union-of-keys across all records; header order uses keys from the first record (in insertion order) then newly-seen keys appended in encounter order.
-- JSON export: writes records as a list of objects.
-- Excel export (optional): requires the optional dependency group (for example, `pip install ".[excel]"`).
+* **`--dry-run` still fetches and parses** (it only skips exporting)
+* In detail-follow mode, failed detail fetches are **skipped per item** (run succeeds if at least one record is parsed)
 
 ---
 
-## Target schema and mode selection
-This section outlines how targets are defined and interpreted.
+### `src/product_scraper/config.py` — Configuration contracts and validation
 
-Targets are loaded from YAML under `targets:`.
+Responsibilities:
 
-### List-only mode target (shape)
-This subsection shows required fields for list-only mode.
+* Loads YAML using a safe loader
+* Enforces the targets schema and mode requirements
+* Loads optional settings YAML
 
-Required keys:
-- `name` (unique)
-- `list_url`
-- `item_selector`
-- `item_fields` (non-empty mapping)
+Targets validation rules (summary):
 
-Example:
+* Top-level config must be a mapping with `targets` as a **non-empty list**
+* Each target must be a mapping and include:
 
-```yaml
-targets:
-  - name: laptops-demo
-    list_url: "https://webscraper.io/test-sites/e-commerce/allinone/computers/laptops"
-    item_selector: "div.thumbnail"
-    item_fields:
-      title: "a.title@title"
-      price: "h4.price"
-      image_url: "img@src"
-      product_url: "a.title@href"
-```
+  * `name` (non-empty, **unique** across targets)
+  * `list_url` (non-empty string)
+* Mode selection and requirements:
 
-### Detail-follow mode target (shape)
-This subsection shows required fields for detail-follow mode.
+  * **List-only** requires:
 
-Required keys:
-- `name` (unique)
-- `list_url`
-- `link_selector`
-- `detail_selectors` (non-empty mapping)
+    * `item_selector` (non-empty string)
+    * `item_fields` (non-empty mapping: field → selector spec)
+  * **Detail-follow** requires:
 
-Example:
+    * `link_selector` (non-empty string)
+    * `detail_selectors` (non-empty mapping: field → selector spec)
+* All selector specs must be non-empty strings
 
-```yaml
-targets:
-  - name: my-shop
-    list_url: "https://example.com/products"
-    link_selector: "a.product-link"
-    detail_selectors:
-      title: "h1.product-title"
-      price: ".price"
-      image_url: "img.product-image@src"
-```
+Settings loading behavior:
 
-### Mode selection
-This subsection explains how mode is chosen.
-
-The CLI treats a target as list-only mode if it includes list-only keys (for example, `item_selector` / `item_fields`). Otherwise, it is interpreted as detail-follow mode.
+* Missing file ⇒ `{}` (allowed)
+* Empty file ⇒ `{}` (allowed)
+* Non-mapping top-level ⇒ error
 
 ---
 
-## Selector spec: extraction contract
-This section explains selector-spec behavior.
+### `src/product_scraper/fetcher.py` — Fetching, retries/backoff, offline demo
 
-Selector specs control how values are extracted from HTML.
+Key classes:
 
-Text extraction:
-- `"h4.price"`: selects an element and extracts `get_text(strip=True)`.
-- `"a.title::text"`: explicit text extraction.
+* `Fetcher` (HTTP)
+* `FileFetcher` (offline fixtures via file paths / `file://` URIs)
+* `FetchError`
 
-Attribute extraction (two equivalent syntaxes):
-- `"a.title@title"`
-- `"a.title::attr(title)"`
+HTTP behavior:
 
-General examples:
-- `"img@src"`
-- `"a@href"`
+* Timeout and user-agent are configurable via settings
+* Attempts:
 
-If the element is not found or the value is empty, extraction returns a missing value.
+  * Configured as `http.max_retries` in settings, but treated as **total attempts**
+* Retry conditions:
+
+  * HTTP `429` and HTTP `5xx`
+  * network exceptions from the HTTP client
+* Optional exponential backoff and jitter:
+
+  * enabled when backoff settings are provided
+
+Politeness:
+
+* Optional `delay_seconds` is applied between **detail page** requests (detail-follow mode)
 
 ---
 
-## Data contract: records, traceability, and URL normalization
-This section covers the fields added and URL handling.
+### `src/product_scraper/parser.py` — Selector spec and parsers
+
+Selector spec syntax supports:
+
+* Text extraction:
+
+  * `"css.selector"` or `"css.selector::text"`
+* Attribute extraction:
+
+  * `"css.selector@href"` or `"css.selector::attr(href)"`
+
+Parsers:
+
+* `ListItemsParser` (list-only)
+
+  * Selects item blocks via `item_selector`
+  * For each item block, extracts fields via selector specs
+* `ListPageParser` (detail-follow)
+
+  * Extracts hrefs from elements matching `link_selector`
+* `DetailPageParser` (detail-follow)
+
+  * Extracts fields from detail page HTML using `detail_selectors`
+  * Includes stable “core fields” (`title`, `price`, `image_url`, `description`) as keys (with `None` if missing)
+
+Extraction guarantees:
+
+* If a selector finds no matching element, the extracted value is `None`
+* Empty or whitespace-only extracted text becomes `None`
+
+---
+
+### `src/product_scraper/validator.py` — Validation and quality reporting
+
+Responsibilities:
+
+* Computes a missing-field summary across records
+* Defines missing as `None` or `""`
+* Formats a human-readable report (printed to stdout when enabled)
+
+Important behavior:
+
+* Validation/quality reporting can be disabled via `settings.validation.enabled`
+* The report is useful for detecting HTML drift (increasing missing counts)
+
+---
+
+### `src/product_scraper/exporter.py` — Exporters
+
+The CLI uses:
+
+* `export_to_csv(records, output_path)`
+
+CSV export contract:
+
+* Header is a stable **union-of-keys**:
+
+  * keys from the first record first
+  * newly discovered keys appended as encountered
+* Missing values are written as empty strings
+
+Additional helpers (not wired into CLI flags by default):
+
+* `export_to_json(...)`
+* `export_to_excel(...)` (optional dependencies)
+
+---
+
+## Configuration contracts
+
+### Targets configuration (`config/targets*.yml`)
+
+Top-level:
+
+* `targets: [ ... ]`
+
+Per-target required keys:
+
+* `name` (unique)
+* `list_url`
+
+Mode A (list-only) required keys:
+
+* `item_selector`
+* `item_fields`
+
+Mode B (detail-follow) required keys:
+
+* `link_selector`
+* `detail_selectors`
+
+---
+
+### Settings configuration (`config/settings*.yml`)
+
+Settings file path:
+
+* Loaded from `config/settings.yml` (optional; missing file is allowed)
+
+Recognized sections:
+
+* `http`:
+
+  * `user_agent`
+  * `timeout`
+  * `max_retries` (total attempts)
+  * `delay_seconds` (detail-follow mode politeness delay)
+  * `retry_backoff_seconds`
+  * `retry_backoff_multiplier`
+  * `retry_jitter_seconds`
+* `output`:
+
+  * `directory`
+  * `csv_filename`
+* `validation`:
+
+  * `enabled`
+* `logging`:
+
+  * `level`
+
+Output path precedence:
+
+1. CLI `--output`
+2. `settings.output.directory` + `settings.output.csv_filename`
+3. Fallback:
+
+   * standard run: `sample_output/products.csv`
+   * demo run: `sample_output/products.demo.csv`
+
+---
+
+## Data contract
+
+### Record shape
+
+Records are dictionaries driven primarily by configuration selectors (plus pipeline-added fields).
 
 Traceability fields:
-- `source_list_url`: always present (both modes).
-- `detail_url`: present in detail-follow mode (the resolved absolute URL actually fetched).
 
-URL normalization:
-- For any field name ending with `_url` (for example, `image_url`, `product_url`, `detail_url`), if the extracted value is relative, it is resolved to an absolute URL using `urljoin()`.
-- Base URL depends on mode:
-  - List-only: base is `list_url`.
-  - Detail-follow: base for detail fields is `detail_url`.
-- Naming a field `*_url` signals “this should be treated as a URL.”
+* `source_list_url` (always present)
+* `detail_url` (detail-follow mode only; the absolute URL actually fetched)
 
----
+### URL normalization
 
-## Error handling and failure modes
-This section describes expected failures.
+Any key ending with `_url` is treated as URL-like and normalized to an absolute URL when possible:
 
-- Configuration errors: invalid YAML, missing keys, empty selectors, duplicate target names, etc. result in `ConfigError`; the CLI terminates with a clear message.
-- Fetch errors: `FetchError` is raised for non-success responses or request exceptions; retry behavior applies only to retryable cases (commonly 429 and 5xx), based on settings.
-- Parse errors: HTML structure changes typically produce missing fields rather than hard failures; quality reporting helps detect regressions (spikes in missing counts).
-- Dry-run mode: when `--dry-run` is set, no output file is written; the CLI logs a count and may log a sample record.
+* List-only mode: base is `list_url`
+* Detail-follow mode: base for detail fields is `detail_url`
+
+This convention is intentionally simple and resilient:
+
+* Naming a field `*_url` means “treat this as a URL and normalize it.”
 
 ---
 
-## Export architecture (CSV union-of-keys)
-This section explains how heterogeneous records are handled.
+## Error handling and exit behavior
 
-Real-world targets often produce heterogeneous records (for example, missing images, extra attributes, category-specific fields). To avoid losing columns, CSV export computes headers as:
+### Error categories
 
-- Keys of the first record (in insertion order).
-- Newly discovered keys from later records appended in encounter order.
+1. **Configuration errors**
 
-This yields a stable, predictable header order while ensuring all fields are represented.
+   * invalid YAML
+   * missing required keys
+   * empty selectors / invalid mode shape
+   * duplicate target names
 
----
+2. **Fetch errors**
 
-## Extensibility points (how to adapt for clients)
-This section lists common extension options.
+   * list page fetch failure is **fatal**
+   * detail page fetch failure is **non-fatal per item** (item skipped)
 
-- Custom parsers: add site-specific parsing logic (pagination, embedded JSON, tables).
-- Storage layer: add a persistence layer (SQLite/Postgres/S3) for scheduled jobs.
-- Scheduling: integrate cron, GitHub Actions, Airflow, or a lightweight scheduler.
-- Notifications: send Slack/email alerts on failures, empty runs, or quality regressions.
-- Anti-bot strategies (compliance-first): introduce slower pacing, caching, and headers; consider official APIs when available.
+3. **Parse drift (HTML changes)**
 
----
+   * often manifests as missing fields (`None`/empty) rather than exceptions
+   * quality reporting is the primary early-warning mechanism
 
-## Security and compliance reminder
-This section reinforces responsible usage.
+4. **No data**
 
-This architecture supports responsible scraping (timeouts, delays, retries), but compliance is a product requirement, not just a code feature. See `docs/SECURITY_AND_LEGAL.md` for concrete guidance on:
+   * if no records are parsed, the run aborts (exit code 1)
 
-- Terms of Service review.
-- robots.txt handling.
-- Rate limiting.
-- Data minimization and privacy.
-- Operational risk management.
+### Exit codes
+
+* `0`: success
+* `1`: fatal failure (config invalid, fatal fetch failure, no records, unexpected exception)
 
 ---
 
-_Last updated: 2025-12-12_
+## Reliability and politeness controls
+
+### Timeouts
+
+* Applied per HTTP request via settings (`http.timeout`)
+
+### Attempts, retries, backoff, jitter
+
+* Retryable:
+
+  * HTTP 429
+  * HTTP 5xx
+  * request exceptions
+* Optional backoff/jitter:
+
+  * enabled when backoff settings are provided
+* Non-retryable:
+
+  * most 4xx errors (except 429)
+
+### Delay
+
+* Optional `http.delay_seconds` applied between detail page requests (detail-follow mode)
+* Helps reduce load and improve operational stability
+
+### User-Agent
+
+* Configurable via settings (`http.user_agent`)
+* Intended to support transparent and client-approved identification
+
+---
+
+## Observability
+
+### Logging
+
+* Logging level is configurable (`logging.level`, default INFO)
+* Key signals:
+
+  * run mode and target selection
+  * number of records parsed
+  * skipped detail URLs with error context
+  * export path written
+
+### Quality report (stdout)
+
+When validation is enabled:
+
+* Total records
+* Fields observed
+* Missing counts per field
+
+This is a practical guardrail against silent regressions when site HTML changes.
+
+---
+
+## Demo mode and deterministic verification
+
+### `--demo` (offline)
+
+* Runs the pipeline without network calls using `fixtures/` HTML files
+* Uses `FileFetcher` to read local HTML
+* Produces a CSV in `sample_output/` by default (unless `--dry-run`)
+
+### Deterministic tests
+
+* Tests do not perform live scraping
+* HTML parsing is validated using fixtures and synthetic HTML strings
+* HTTP behavior is validated via mocked responses
+
+This ensures reproducibility in CI and reduces risk during evaluation.
+
+---
+
+## Testing and CI strategy (architecture implications)
+
+### What is covered
+
+* Config validation rules
+* Selector spec parsing and extraction behavior
+* List-only parsing
+* Detail-follow parsing
+* Fetch retry logic for retryable vs non-retryable errors
+* Exporter data contract (union-of-keys)
+* CLI orchestration, including:
+
+  * demo mode
+  * dry-run behavior
+  * output path precedence via settings
+
+### CI gates
+
+GitHub Actions runs:
+
+* `ruff check src tests`
+* `pytest`
+
+A change that breaks the contract typically fails CI quickly and deterministically.
+
+---
+
+## Security, legal, and compliance posture
+
+This template is designed to support responsible operation:
+
+* Politeness knobs (delay, retries/backoff)
+* Configurable User-Agent
+* Deterministic tests/demos without live scraping
+* Traceability fields to support auditability
+
+Explicit boundaries:
+
+* No anti-bot bypass mechanisms are included
+* Operators should review ToS/robots and confirm authorization for the target and intended use
+* Avoid personal data unless clearly authorized and necessary
+
+For operational guidance, see `docs/SECURITY_AND_LEGAL.md`.
+
+---
+
+## Extensibility points
+
+### Configuration-first adaptations
+
+* Add a new target by authoring YAML selectors
+* Iterate safely using:
+
+  * `--dry-run` and small `--limit`
+  * quality report review
+  * then a full run with tuned delay/backoff
+
+### Code-level extensions (recommended evolution paths)
+
+* Pagination support (page discovery + max pages)
+* Storage adapters (SQLite/Postgres), incremental runs and diffing
+* Concurrency (bounded parallel detail fetch, maintaining politeness)
+* Notifications (Slack/email) and structured run reports
+* Stronger schema validation + type checking
+* CLI `--format` to expose JSON/Excel exports using existing exporter helpers
+
+---
+
+## Repository layout (navigation)
+
+```text
+src/product_scraper/     Core implementation
+config/                 Example targets and settings
+docs/                   Architecture, config, operations, testing, legal guidance
+fixtures/               Offline HTML for demo/tests
+tests/                  Unit and orchestration tests
+.github/workflows/       CI pipeline definition
+sample_output/           Sample outputs for demonstration
+```
+
+---
+
+## Appendix: Selector spec reference
+
+### Text extraction (default)
+
+* `"h4.price"`
+* `"h4.price::text"`
+
+Returns `element.get_text(strip=True)` (or `None` if missing/empty).
+
+### Attribute extraction
+
+* `"a.title@href"`
+* `"a.title::attr(href)"`
+
+Returns `element.get(attr)` (or `None` if missing/empty).
+
+---
+
+## Appendix: Operational quick reference
+
+Recommended safe iteration loop:
+
+1. Create runtime configs from examples:
+
+   * `config/targets.example.yml` → `config/targets.yml`
+   * `config/settings.example.yml` → `config/settings.yml`
+2. Update selectors for the target site
+3. Validate quickly:
+
+   * run with `--dry-run` and a small `--limit`
+4. Review:
+
+   * missing-field report
+   * sample parsed record in logs (dry-run)
+5. Run the full scrape with tuned `delay_seconds`, timeouts, and attempts
+6. Treat non-zero exit codes as failures in schedulers/CI and review logs

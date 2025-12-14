@@ -1,196 +1,352 @@
-# Testing guide
-This document explains the testing strategy for the Product List Scraper Template, how to run tests locally, and how to extend the test suite safely when adapting the template for client work.
+# Testing Guide
 
-Goals:
-- Ensure correctness of parsing, config validation, exporting, and CLI orchestration.
-- Keep tests deterministic and fast (no live network calls).
-- Provide confidence that config-only changes will not break core behavior.
+This document explains how testing is structured in this repository, how to run tests locally and in CI, what the suite proves, and how to extend coverage safely when adapting this template to a new target.
 
 ---
 
-## Test philosophy
-This section outlines the testing approach.
+## Why this repository emphasizes testing
 
-- Unit tests validate small, pure components (parsers, exporter logic, config validation).
-- CLI tests validate orchestration and integration boundaries using mocked fetchers.
-- No live scraping in tests to avoid flaky failures and accidental policy violations.
+Web scraping projects fail most often due to:
+- configuration drift (invalid YAML, wrong mode shape, empty selectors)
+- HTML structure changes that silently break extraction
+- fragile network behavior (timeouts, retries, overload)
+- unstable output schemas that break downstream consumers
 
-The guiding principle is: tests should fail only when behavior changes, not when the internet changes.
+This template addresses these risks with a deterministic, layered test suite that validates the pipeline end-to-end without relying on live third-party sites.
 
 ---
 
-## Running tests locally
-This section explains how to run checks.
+## Testing principles
 
-### Install dev dependencies
+### Deterministic by default (no live network)
+The test suite intentionally avoids scraping real websites. All parsing and orchestration tests use:
+- local HTML fixtures (`fixtures/`)
+- inline HTML strings
+- fake fetchers and dummy HTTP responses
 
-# Install the package in editable mode
+This keeps tests:
+- reproducible across machines
+- stable in CI
+- safe to run without unintentionally hitting external services
+
+### Layered coverage (unit + orchestration)
+Coverage is split into:
+- **Unit tests** for modules (config, parser, fetcher, exporter, validator)
+- **CLI tests** that validate orchestration wiring and pipeline behavior using fakes (still offline)
+
+This structure makes it easy to identify failures and isolate regressions.
+
+---
+
+## Quickstart
+
+### Install development dependencies
+From the repository root:
+
 ```bash
-pip install -e .
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+````
+
+### Run lint and tests
+
+```bash
+python -m ruff check src tests
+python -m pytest
 ```
 
-### Run linting and tests
+### Optional: Excel export dependencies
 
-# Lint the code
+The CLI exports CSV. An Excel exporter helper exists and is available via optional dependencies:
+
 ```bash
-ruff check src tests
-```
-
-# Run the test suite
-```bash
-pytest
-```
-
-### Optional Excel support during development
-
-# Install Excel extras
-```bash
-pip install -e ".[excel]"
+python -m pip install -e ".[excel]"
 ```
 
 ---
 
-## What is covered by tests
-This section lists coverage per test module.
+## Test suite overview
 
-### `tests/test_config.py`
-- Validates configuration parsing and schema rules, including:
-  - Target list structure (`targets:` must be a list).
-  - Required keys (`name`, `list_url`).
-  - Mode detection and mode-specific requirements:
-    - List-only mode requires `item_selector` and non-empty `item_fields`.
-    - Detail-follow mode requires `link_selector` and non-empty `detail_selectors`.
-  - Selector strings must be non-empty.
-  - Target names must be unique.
-- These tests should catch most “bad YAML” issues before runtime.
+The `tests/` directory is organized by module responsibilities:
 
-### `tests/test_parser.py`
-- Validates HTML parsing behavior for:
-  - Selector spec syntax (plain text, `@attr`, `::attr(name)`, `::text`).
-  - List-only parsing (`ListItemsParser.parse_items`).
-  - Detail-follow parsing (`ListPageParser.parse_links` and `DetailPageParser.parse_detail`).
-- All parser tests use static HTML snippets embedded in the test.
+* `test_config.py` — configuration loading and schema validation
+* `test_parser.py` — selector spec behavior and HTML parsing correctness
+* `test_fetcher.py` — HTTP fetching logic, retry rules, and failure handling
+* `test_exporter.py` — CSV/JSON export correctness and schema stability
+* `test_validator.py` — quality report (missing field counts) correctness
+* `test_cli.py` — offline pipeline/orchestration validation, demo behavior, and output path precedence
 
-### `tests/test_fetcher.py`
-- Validates the HTTP layer without real network calls, typically by mocking:
-  - Success responses.
-  - Retryable failures (for example, 429 and 5xx).
-  - Non-retryable failures (for example, other 4xx).
-  - Session usage / call paths (depending on implementation).
-- The test suite ensures:
-  - Retry counts are respected.
-  - Exceptions are converted into `FetchError` with URL/status context.
-  - No test sleeps (defaults should avoid backoff delays).
+The suite is designed so that a clean `pytest` run provides high confidence that:
 
-### `tests/test_exporter.py`
-- Validates output serialization, especially:
-  - CSV export and the stable union-of-keys header policy.
-  - Correct mapping of missing keys to empty cells.
-- Optional:
-  - If JSON export has helpers, tests may validate JSON shape.
-  - Excel export is usually tested lightly (or behind optional dependencies) to keep CI stable.
-
-### `tests/test_cli.py`
-- Validates CLI orchestration using mocked fetchers and temporary output paths:
-  - `--dry-run` produces no output file and exits cleanly.
-  - `--limit` limits record count.
-  - Mode behaviors:
-    - List-only mode parses items and normalizes `*_url` fields against `list_url`.
-    - Detail-follow mode adds `detail_url` and normalizes URL fields appropriately.
-  - Configuration errors cause non-zero exit codes and helpful messages.
+* config validation prevents common misruns
+* parser logic matches the selector contract
+* fetch retry rules are correct and not overly aggressive
+* exports are stable and downstream-friendly
+* CLI wiring behaves as documented
 
 ---
 
-## No live network calls
-This section emphasizes keeping tests offline.
+## What each test module verifies
 
-Tests must never hit real targets. This is both a reliability practice and a compliance/safety practice. When you need to test scraping behavior:
+### `tests/test_config.py` — configuration loading and validation
 
-- Copy a representative HTML snippet into a fixture or string.
-- Validate selectors against that snippet.
-- Mock the fetcher to return that HTML.
+This module verifies the contract enforced by `product_scraper.config`:
 
----
+* The top-level targets file must be a mapping and include a non-empty `targets` list.
+* Each target must be a mapping with:
 
-## Extending tests when adding a new client target
-This section describes extending coverage for new targets.
+  * non-empty `name`
+  * non-empty `list_url`
+  * unique names across targets
+* **List-only mode** requires:
 
-When adapting this template for a specific site, you typically change `config/targets.yml`, selectors, and output field names. Recommended steps:
+  * `item_selector` (non-empty)
+  * `item_fields` (non-empty mapping)
+* **Detail-follow mode** requires:
 
-- Add or update HTML fixtures (small snippets) that reflect the target’s structure.
-- Add a parser unit test that validates the selectors you plan to ship.
-- Add a CLI test that:
-  - Mocks list HTML (and detail HTML if detail-follow).
-  - Runs the CLI in dry-run or temp-output mode.
-  - Asserts record keys and a few values.
+  * `link_selector` (non-empty)
+  * `detail_selectors` (non-empty mapping)
+* Selector mappings must contain non-empty strings.
+* Settings loading behavior:
 
-This approach is faster than repeated manual scraping runs and prevents regressions.
+  * missing settings file → empty dict
+  * empty settings file → empty dict
+  * non-mapping settings YAML → error
 
----
+Why it matters:
 
-## Debugging failing tests
-This section lists common failure types and fixes.
-
-Ruff failures  
-Run: `ruff check src tests`  
-Typical causes: unused imports, formatting/style issues, inconsistent typing. Fix style issues before interpreting logic failures.
-
-Parser failures  
-Common causes: selector specs changed; HTML fixtures no longer match parser behavior; attr/text mode interpretation changed. Fix by confirming selector specs (`@attr`, `::attr()`, `::text`) and verifying the fixture HTML; adjust tests only when behavior changes intentionally.
-
-CLI failures  
-Common causes: CLI flag changes; output behavior changed (for example, union-of-keys headers or new trace fields); mode detection logic changed. Fix by keeping CLI options backward compatible where possible; updating tests to match intended behavior; ensuring `--dry-run` and `--limit` remain stable.
-
-Fetcher failures  
-Common causes: patch target changed (for example, `requests.get` vs `session.get`); retry policy expanded (for example, include 429/5xx). Fix by patching the correct call site and asserting behavior rather than internal implementation details.
+* Most client-facing scraping failures start as configuration mistakes. Strict schema checks prevent silent failures and reduce debugging time.
 
 ---
 
-## CI expectations
-This section describes CI checks.
+### `tests/test_parser.py` — selector spec and parsing correctness
 
-CI should run:
+This module validates `product_scraper.parser`:
 
-# Lint the code
+* List page link extraction (detail-follow mode) returns expected links.
+* Detail page extraction returns expected field values.
+* Missing selectors or missing elements produce `None` safely (no hard crashes).
+* Extra selectors can be extracted and included.
+* Selector spec behavior:
+
+  * default text extraction
+  * explicit `::text`
+  * attribute extraction via `@attr` and `::attr(attr)`
+* List-only parsing extracts multiple repeated items correctly.
+
+Why it matters:
+
+* HTML changes typically degrade data quality first (missing fields). Parser tests provide a fast regression signal using stable fixtures.
+
+---
+
+### `tests/test_fetcher.py` — HTTP behavior and retry rules
+
+This module verifies `product_scraper.fetcher`:
+
+* Successful GET returns response text.
+* Retries occur on retryable server conditions and can succeed after recovery.
+* Non-retryable 4xx are not retried (by design).
+* Failure after exhausting attempts raises `FetchError`.
+
+Key retry rules implemented:
+
+* Retry on `429` and `5xx`.
+* Do not retry other `4xx`.
+* Backoff/jitter behavior is controlled by settings.
+
+Why it matters:
+
+* Correct retry behavior improves reliability while reducing the risk of overloading targets or creating “runaway” request loops.
+
+---
+
+### `tests/test_exporter.py` — export correctness and schema stability
+
+This module verifies `product_scraper.exporter` behavior:
+
+* CSV export writes correct rows.
+* Missing fields are filled with empty strings (CSV-friendly).
+* Export with no records creates an empty file.
+* JSON exporter helper writes valid JSON output.
+* CSV header stability is enforced via union-of-keys logic:
+
+  * header begins with keys from the first record (preserving order)
+  * newly discovered keys are appended as encountered
+
+Why it matters:
+
+* Downstream pipelines (spreadsheets, databases, BI tools) depend on stable schemas. A predictable header strategy prevents subtle breakage.
+
+---
+
+### `tests/test_validator.py` — quality report correctness
+
+This module validates the quality-reporting utilities in `product_scraper.validator`:
+
+* Missing-field counting across records
+* All-fields-present case
+* Empty input handling
+* Report formatting includes the expected signals and values
+
+Why it matters:
+
+* Quality reports are an operational safety net. They surface regressions caused by HTML changes (e.g., sudden spikes in missing counts).
+
+---
+
+### `tests/test_cli.py` — orchestration and pipeline wiring (offline)
+
+This module verifies `product_scraper.cli` end-to-end behavior without live network access:
+
+* Pipeline smoke test using a fake fetcher
+* URL normalization for any `*_url` fields
+* Demo mode writes CSV using local fixtures
+* List-only dry-run behavior
+* Output path precedence when `--output` is omitted (settings-based defaults)
+
+Why it matters:
+
+* Orchestration issues often occur at boundaries between modules. CLI tests ensure the complete pipeline behavior matches documentation and remains safe to execute in CI.
+
+---
+
+## Fixtures and test doubles
+
+### HTML fixtures (`fixtures/`)
+
+This repo includes representative HTML under `fixtures/`, used for deterministic parsing and demo runs:
+
+* `fixtures/list.html`
+* `fixtures/detail_*.html`
+
+Fixtures are intentionally small and focused on the elements being parsed.
+
+### Fakes and dummy responses
+
+* CLI tests use fake fetchers that return controlled HTML per URL.
+* Fetcher tests use dummy response objects to simulate status codes and failures.
+
+This approach validates logic without relying on external sites or unstable network conditions.
+
+---
+
+## Running tests effectively
+
+### Common workflows
+
 ```bash
-ruff check src tests
+# Run the full suite
+python -m pytest
+
+# Run a single test module
+python -m pytest tests/test_parser.py
+
+# Run tests matching a substring
+python -m pytest -k selector_spec
+
+# Verbose output
+python -m pytest -vv
 ```
 
-# Run tests
+### Linting
+
 ```bash
-pytest
+python -m ruff check src tests
 ```
 
-All tests should pass without network access, on a clean environment, with minimal optional dependencies (Excel deps should be optional).
+---
+
+## CI behavior
+
+Continuous Integration runs the same checks as the recommended local workflow:
+
+* Ruff linting (`ruff check src tests`)
+* Pytest (`pytest`)
+
+See `.github/workflows/ci.yml` for the exact CI definition.
+
+Operational note:
+
+* Local runs should match CI commands to avoid “works on my machine” drift.
 
 ---
 
-## Recommended developer workflow
-This section lists a suggested workflow.
+## Extending tests when adding a new target
 
-Before committing:
+When adapting this template to a new client site, extend tests before relying on live runs.
 
-# Lint and test
-```bash
-ruff check src tests
-pytest
-```
+### Recommended workflow
 
-Before opening a PR:
-- Ensure you added tests for any new parsing logic or schema changes.
-- Ensure your config examples still validate.
-- If you changed exporter behavior, update tests accordingly.
+1. Capture representative HTML snapshots (list page and 1–2 detail pages), with permission where required.
+2. Store them as fixtures or inline HTML in tests.
+3. Configure a new target in your runtime targets file and validate locally using:
 
----
+   * `--dry-run` and a small `--limit`
+4. Add/extend parser tests to assert:
 
-## Where to go next
-This section links to related docs.
+   * required fields are extracted correctly
+   * link discovery works (detail-follow mode)
+5. Add/extend CLI tests only if you changed orchestration or output schema.
 
-- `docs/CONFIG_GUIDE.md` for config + selector syntax.
-- `docs/architecture.md` for module boundaries and data contracts.
-- `docs/operations.md` for runtime tuning and troubleshooting.
-- `docs/SECURITY_AND_LEGAL.md` for compliance and safe scraping practices.
+### Rules of thumb
+
+* Keep fixtures minimal and focused on what you parse.
+* Avoid including sensitive or personal data in fixtures.
+* Prefer deterministic assertions (exact strings, stable counts, stable headers).
 
 ---
 
-_Last updated: 2025-12-12_
+## Troubleshooting
+
+### “It runs but returns empty values”
+
+* Verify selectors match the target HTML structure.
+* Confirm selector spec usage:
+
+  * use `@href`, `@src`, or `::attr(...)` for attributes
+  * use default or `::text` for text nodes
+* Use `--dry-run` with a small `--limit` to iterate quickly.
+
+### “Config validation fails”
+
+* Confirm the target matches the intended mode:
+
+  * list-only requires `item_selector` + `item_fields`
+  * detail-follow requires `link_selector` + `detail_selectors`
+* Ensure selector mappings are non-empty strings.
+* Ensure target `name` values are unique.
+
+### “Fetcher retry tests fail”
+
+* Confirm retryable status codes (429 and 5xx by design).
+* Confirm “max retries” semantics align with the implemented attempt loop (bounded number of attempts).
+
+### “CSV schema mismatch”
+
+* Review union-of-keys behavior:
+
+  * header starts with the first record’s keys
+  * new keys are appended as encountered
+* Ensure downstream expectations match this contract.
+
+---
+
+## Safety and compliance note for testing
+
+* Tests and CI intentionally avoid live scraping of third-party sites.
+* If you introduce live integration checks:
+
+  * keep them opt-in (never run by default in CI)
+  * ensure permission and ToS alignment
+  * respect rate limits, delays, and operational safeguards
+  * never commit secrets or sensitive data
+
+---
+
+## Related documentation
+
+* `docs/architecture.md` — system design, data flow, failure modes
+* `docs/CONFIG_GUIDE.md` — config schema, selector spec, validation rules
+* `docs/operations.md` — scheduling, observability, runtime knobs
+* `docs/SECURITY_AND_LEGAL.md` — responsible use and compliance guidance

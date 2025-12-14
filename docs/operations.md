@@ -1,314 +1,707 @@
-# Operations guide
-This guide covers how to run, monitor, and troubleshoot the Product List Scraper Template in real-world usage (local runs, scheduled runs, and client delivery contexts).
+# Operations Guide
 
-It assumes you have already reviewed:
-- `README.md` for quickstart usage.
-- `docs/CONFIG_GUIDE.md` for target/settings configuration.
-- `docs/architecture.md` for internal design.
+This document explains how to install, run, observe, schedule, and maintain **Product-List-Scraper-Template** safely and reliably. It is written to be practical for real delivery work and suitable for publishing as-is on GitHub.
 
 ---
 
-## Installation and runtime setup
-This section describes installing and preparing runtime configs.
+## Contents
 
-### Recommended install (editable, for development/iteration)
+- [Scope and related docs](#scope-and-related-docs)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Runtime configuration](#runtime-configuration)
+- [Run commands](#run-commands)
+- [Output management](#output-management)
+- [HTTP behavior and politeness controls](#http-behavior-and-politeness-controls)
+- [Validation and quality reporting](#validation-and-quality-reporting)
+- [Logging and observability](#logging-and-observability)
+- [Exit codes and failure semantics](#exit-codes-and-failure-semantics)
+- [Scheduling](#scheduling)
+- [Maintenance workflow](#maintenance-workflow)
+- [Troubleshooting](#troubleshooting)
+- [Security, legal, and compliance reminders](#security-legal-and-compliance-reminders)
+- [Delivery checklist](#delivery-checklist)
+- [Appendix: Minimal configuration examples](#appendix-minimal-configuration-examples)
 
-# Create and activate a virtual environment, then install
+---
+
+## Scope and related docs
+
+This guide covers:
+
+- installing the package and setting up a runtime environment
+- configuring targets and operational settings
+- running the CLI safely (including “safe iteration” patterns)
+- output handling, logging, and failure handling
+- scheduling and maintenance over time
+
+Related documentation:
+
+- Target schemas, selector syntax, and configuration validation rules → `docs/CONFIG_GUIDE.md`
+- Architecture, data flow, and component responsibilities → `docs/architecture.md`
+- Testing approach and how to run tests locally/CI → `docs/testing.md`
+- Security/legal posture and responsible scraping guidelines → `docs/SECURITY_AND_LEGAL.md`
+
+---
+
+## Prerequisites
+
+- Python **3.11+**
+- pip (bundled with Python)
+
+Recommended:
+
+- A virtual environment (`venv`) per clone
+- Git (for cloning and updates)
+
+Supported operating systems:
+
+- Windows / macOS / Linux
+
+---
+
+## Installation
+
+### Recommended: editable install (best for iteration)
+
+Create and activate a virtual environment, then install the project in editable mode.
+
+#### Windows (PowerShell)
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -e ".[dev]"
+````
+
+#### macOS / Linux (bash/zsh)
+
 ```bash
 python -m venv .venv
-# Windows:
-#   .\.venv\Scripts\activate
-# macOS/Linux:
-#   source .venv/bin/activate
-
+source .venv/bin/activate
 python -m pip install --upgrade pip
+pip install -e ".[dev]"
+```
+
+This installs:
+
+* runtime dependencies
+* development tooling (`ruff`, `pytest`, etc.)
+
+### Runtime-only install (minimal)
+
+If the environment is strictly “run-only” and you do not need lint/tests:
+
+```bash
 pip install -e .
 ```
 
-### Optional Excel export support
+### Optional: Excel export support
 
-# Install Excel extras
+The CLI exports **CSV**. The codebase also includes an Excel exporter helper (not wired into the CLI by default) that requires optional dependencies.
+
+Install Excel extras:
+
 ```bash
 pip install -e ".[excel]"
 ```
 
-### Runtime config files (local/client)
+---
 
-# Create runtime configs from examples
+## Runtime configuration
+
+This template is designed so most adaptation happens in YAML, not in Python code.
+
+### Files at a glance
+
+Committed examples:
+
+* `config/targets.example.yml`
+* `config/settings.example.yml`
+* `.env.example`
+
+Recommended runtime files (local / client-specific):
+
+* `config/targets.yml`
+* `config/settings.yml`
+* `.env` (optional)
+
+Create runtime files from the examples:
+
+#### Windows (PowerShell)
+
+```powershell
+copy config\targets.example.yml config\targets.yml
+copy config\settings.example.yml config\settings.yml
+copy .env.example .env
+```
+
+#### macOS / Linux
+
 ```bash
 cp config/targets.example.yml config/targets.yml
 cp config/settings.example.yml config/settings.yml
+cp .env.example .env
 ```
 
-Recommended policy:
-- Track `*.example.yml` as portfolio/reference.
-- Keep `config/targets.yml` and `config/settings.yml` out of Git (they can include client-specific URLs, selectors, or operational settings).
+### Targets configuration (`--config`)
+
+The CLI loads targets from the path passed to `--config`.
+
+* If you **do not** pass `--config`, it defaults to `config/targets.example.yml`.
+* If multiple targets exist, you can select one by name using `--target-name`.
+
+Targets support two modes:
+
+1. **List-only mode**
+
+   * Fetch the list page once and parse repeated items using:
+
+     * `item_selector`
+     * `item_fields` (field → selector spec)
+
+2. **Detail-follow mode**
+
+   * Fetch the list page, extract links with:
+
+     * `link_selector`
+   * Fetch each detail page and extract fields with:
+
+     * `detail_selectors` (field → selector spec)
+
+See `docs/CONFIG_GUIDE.md` for the exact schemas and selector spec syntax (text vs attribute extraction).
+
+### Settings configuration (`config/settings.yml`)
+
+Operational settings are loaded from:
+
+* `config/settings.yml` (fixed path)
+
+Notes:
+
+* If `config/settings.yml` does **not** exist, the run still works (settings fall back to defaults).
+* If the file exists, it must parse to a top-level YAML mapping (object).
+
+Supported settings (from the example file):
+
+* `http.*`: User-Agent, timeout, attempts, delay, backoff/jitter
+* `output.*`: default output directory and filename (used if `--output` is omitted)
+* `validation.enabled`: enable/disable quality reporting
+* `logging.level`: logging verbosity
+
+### Environment variables and `.env`
+
+The CLI loads `.env` automatically (via `python-dotenv`).
+
+Common operational environment variables:
+
+* `HTTP_PROXY`
+* `HTTPS_PROXY`
+
+Guidance:
+
+* Do not commit secrets into `.env`.
+* Prefer environment-specific secret injection (CI secrets, OS-level env vars, secret managers).
+* If using proxies, ensure authorization and compliance with the target site and your client scope.
 
 ---
 
-## Running the scraper
-This section provides common run modes.
+## Run commands
 
-### Basic run (writes output)
+### Help
 
-# Run a full scrape
 ```bash
-product-scraper --config config/targets.yml --output output/products.csv
+product-scraper --help
 ```
 
-### Dry run (no output file)
-Use this when iterating on selectors/config.
+### Basic run (writes a CSV)
 
-# Run without writing output
 ```bash
-product-scraper --config config/targets.yml --output output/products.csv --dry-run
+product-scraper --config config/targets.yml --output output/runs/products.csv
 ```
 
-### Limit records
-Useful for fast tests and quick validation.
+If `--target-name` is omitted, the **first** target in the config is used.
 
-# Run with a limit
+### Dry run (safe iteration)
+
+Dry-run still **fetches and parses** pages, and still prints the quality report (unless disabled), but it **does not write** the CSV output.
+
 ```bash
-product-scraper --config config/targets.yml --output output/products.csv --limit 25
+product-scraper --config config/targets.yml --dry-run --limit 10
 ```
 
-### Select a target
-If multiple targets exist in the YAML.
+Use dry-run when:
 
-# Run a specific target
+* tuning selectors
+* validating config changes
+* checking whether a target has drifted (HTML changed)
+
+### Limit for faster iteration and lower load
+
+In list-only mode, the limit caps the number of parsed items.
+In detail-follow mode, the limit caps the number of detail links processed.
+
 ```bash
-product-scraper --config config/targets.yml --output output/products.csv --target-name laptops-demo
+product-scraper --config config/targets.yml --limit 20 --dry-run
+```
+
+### Select a target by name
+
+```bash
+product-scraper --config config/targets.yml --target-name my-shop --dry-run --limit 20
+```
+
+### Demo mode (offline, deterministic)
+
+Demo mode runs using local HTML fixtures in `fixtures/` and does not use network access.
+
+```bash
+product-scraper --demo
+```
+
+Demo mode is useful for:
+
+* deterministic pipeline demonstration
+* validating installation and wiring without relying on external websites
+* portfolio-safe runs in restricted environments
+
+---
+
+## Output management
+
+### Output path precedence (deterministic)
+
+The output path is resolved in the following order:
+
+1. `--output` CLI argument
+2. `config/settings.yml` → `output.directory` + `output.csv_filename`
+3. Fallback:
+
+   * normal runs: `sample_output/products.csv`
+   * demo runs: `sample_output/products.demo.csv`
+
+### Output data contract and traceability
+
+The pipeline adds traceability fields:
+
+* `source_list_url` is always present (both modes)
+* `detail_url` is present in detail-follow mode (the resolved URL fetched)
+
+### URL normalization (`*_url` convention)
+
+Any field name ending with `_url` is treated as URL-like and normalized to an absolute URL using `urljoin()` when possible.
+
+* List-only mode uses `list_url` as the base.
+* Detail-follow mode uses the current `detail_url` as the base for detail fields.
+
+Operational tip: use `_url` suffix consistently (e.g., `image_url`, `product_url`) so normalization is applied.
+
+### Output hygiene for scheduled runs
+
+Recommended practices:
+
+* Write outputs outside the repository root or into a dedicated run directory (e.g., `output/runs/`).
+* Use timestamped filenames to keep runs auditable and avoid accidental overwrites.
+* Apply a retention policy (e.g., keep last 30–90 runs depending on requirements).
+
+Example timestamped output:
+
+```bash
+ts=$(date +"%Y%m%d_%H%M%S")
+product-scraper --config config/targets.yml --output "output/runs/products_${ts}.csv"
 ```
 
 ---
 
-## Understanding output and traceability
-This section explains added fields and normalization.
+## HTTP behavior and politeness controls
 
-Traceability fields:
-- `source_list_url` (always present): list page used for the run.
-- `detail_url` (detail-follow mode only): resolved absolute URL that was fetched for each record.
+HTTP behavior is configured under `http:` in `config/settings.yml`.
 
-URL normalization (`*_url`):
-- Any field name ending in `*_url` (for example, `image_url`, `product_url`, `detail_url`) is resolved to an absolute URL when possible.
-- Relative URLs are normalized using `urljoin(...)` with a base that depends on the mode:
-  - List-only: base is `list_url`.
-  - Detail-follow: base is `detail_url` for detail page fields.
-- If you want a field normalized, name it with the `*_url` suffix.
+### User-Agent
 
-CSV header policy:
-- CSV export writes headers as a stable union-of-keys across all records.
-- Start with keys from the first record (in insertion order).
-- Append any newly encountered keys from later records.
-- This ensures optional/conditional fields do not disappear.
-
----
-
-## HTTP behavior: retries, timeouts, delays, backoff
-This section describes HTTP controls in `config/settings.yml` under `http:`.
-
-Typical keys:
+Set a descriptive User-Agent:
 
 ```yaml
 http:
-  user_agent: "Mozilla/5.0 (compatible; ProductScraper/1.0)"
+  user_agent: "Mozilla/5.0 (compatible; ProductListScraper/1.0)"
+```
+
+### Timeout
+
+```yaml
+http:
   timeout: 10
+```
+
+Tune based on target responsiveness and scheduler expectations.
+
+### Attempts, retries, and backoff
+
+Key settings:
+
+```yaml
+http:
   max_retries: 3
-  delay_seconds: 0.0
   retry_backoff_seconds: 0.0
   retry_backoff_multiplier: 2.0
   retry_jitter_seconds: 0.0
 ```
 
-Timeouts:
-- `timeout` controls how long a request can hang before failing.
-- In production, use a finite timeout (10–30 seconds is common).
+Important semantics:
 
-Retries:
-- Retry on 429 (rate limited).
-- Retry on 5xx (transient server errors).
-- Do not retry other 4xx by default.
-- Retries should be limited to avoid being disrespectful or blocked.
+* `max_retries` is the maximum **attempts total** (attempts 1..max_retries).
+* Retried conditions:
 
-Delay (politeness / stability):
-- `delay_seconds` introduces a sleep between requests (especially important in detail-follow mode).
-- Increasing delay reduces block risk and improves compliance posture.
+  * HTTP `429`
+  * HTTP `5xx`
+  * transient request exceptions
+* Most other `4xx` responses are not retried.
 
-Backoff knobs (optional):
-- Backoff is applied only if `retry_backoff_seconds > 0.0`.
-- `retry_backoff_seconds`: initial backoff delay.
-- `retry_backoff_multiplier`: backoff growth factor per retry.
-- `retry_jitter_seconds`: random jitter to avoid synchronized retries.
-- Keep defaults at 0.0 for local iteration; enable backoff for production-like workloads.
+Backoff behavior:
 
----
+* If `retry_backoff_seconds > 0`, backoff grows by multiplier per attempt and can include jitter.
 
-## Rate limiting
-This section explains pacing controls for politeness and stability.
+### Delay (politeness / rate limiting)
 
-- `http.delay_seconds` adds a fixed delay between detail fetches; increase for sensitive targets.
-- Use `--limit` for small, safe test runs before full-volume jobs.
-- Avoid parallel execution of multiple jobs against the same target to reduce block risk.
+```yaml
+http:
+  delay_seconds: 1.0
+```
 
----
+Nuance:
 
-## Retries and backoff
-This section summarizes retry behavior.
+* `delay_seconds` is applied **between detail page fetches** in detail-follow mode.
+* List-only mode does not apply inter-request delay because it fetches only the list page once.
 
-- Retryable statuses: 429 and 5xx are retried; other 4xx are treated as fatal.
-- Controls in `config/settings.yml` under `http`:
-  - `max_retries`
-  - `retry_backoff_seconds`
-  - `retry_backoff_multiplier`
-  - `retry_jitter_seconds`
-- Keep backoff at 0.0 for local iteration; enable controlled backoff for production if transient errors appear.
+### Proxies
 
----
+If you need a proxy, use environment variables:
 
-## Timeouts
-This section clarifies timeout behavior.
+* `HTTP_PROXY`
+* `HTTPS_PROXY`
 
-- `http.timeout` sets per-request timeout (seconds); default is 10.
-- Use finite timeouts (for example, 10–30 seconds) to avoid hanging runs.
-- Combine with retries/backoff to balance resilience and run time.
-
----
-
-## User-Agent
-This section covers User-Agent configuration.
-
-- Set `http.user_agent` to a descriptive string (default provided).
-- Use client-approved identifiers where required; avoid spoofing forbidden headers.
-
----
-
-## Logging levels
-This section outlines logging guidance.
-
-- `logging.level` controls verbosity (for example, `INFO`, `DEBUG`).
-- Recommended:
-  - `INFO` for scheduled or client-facing runs.
-  - `DEBUG` temporarily when iterating on selectors.
-- Capture logs to files in unattended runs (cron/Task Scheduler/CI) for auditability.
-
----
-
-## Exit codes
-This section explains CLI exit behavior.
-
-- Exit code `0`: success.
-- Non-zero: configuration validation failures, fatal fetch errors, or unexpected exceptions.
-- In schedulers/CI, treat non-zero as failure and review logs.
+Only use proxies if authorized and consistent with the target’s policies and client scope.
 
 ---
 
 ## Validation and quality reporting
-This section explains validation controls.
 
-Validation/quality reporting helps detect silent failures (for example, site HTML changed and fields became empty). A typical settings block:
+Validation is enabled by default (see `config/settings.example.yml`):
 
 ```yaml
 validation:
   enabled: true
 ```
 
-Common quality checks:
-- Missing/empty field counts by column.
-- Coverage ratios (how often each field appears).
+When enabled, the run prints a report including:
 
-Operational recommendation: watch for sudden drops in coverage (for example, title becomes missing for 90% of records). Treat major coverage changes as a signal to update selectors.
+* total records
+* set of fields observed
+* missing counts per field (None/empty string)
+
+How to use the report operationally:
+
+* A spike in missing counts often indicates selector drift or HTML changes.
+* A drop in record count often indicates list parsing problems, blocking, or site changes.
+
+You can disable validation (not recommended unless you have stronger external monitoring):
+
+```yaml
+validation:
+  enabled: false
+```
 
 ---
 
-## Logs and observability
-This section describes logging practices.
+## Logging and observability
 
-Logging is typically configured via `logging.level`:
+### Logging level
 
 ```yaml
 logging:
   level: "INFO"
 ```
 
-Recommended practices:
-- Use `INFO` for normal operations, `DEBUG` for selector iteration.
-- Log key lifecycle events: selected target name, mode (list-only vs detail-follow), number of items/links parsed, number of records exported, summary of quality report, errors with URL context.
-- For scheduled runs, capture logs to a file or an external system (depending on client requirements).
+Supported levels include `DEBUG`, `INFO`, `WARNING`, `ERROR`.
+
+### Output streams (practical notes)
+
+Operationally relevant conventions:
+
+* Quality report is printed to stdout (via `print`).
+* Many errors and skip messages are printed to stderr.
+* Python logging typically emits to stderr by default.
+
+Recommendation:
+
+* In schedulers, capture both stdout and stderr.
+* Store logs alongside outputs for auditing.
+
+### Minimal monitoring signals (recommended)
+
+For scheduled runs, treat these as primary signals:
+
+* non-zero exit code
+* “No records parsed” failure
+* repeated 429/5xx or increasing retries
+* sustained high missing counts or sudden record-count drops
 
 ---
 
-## Scheduling (cron / Task Scheduler / CI)
-This section outlines scheduling approaches.
+## Exit codes and failure semantics
 
-### Linux/macOS cron example
-Run daily at 02:00.
+### Exit codes
 
-# Schedule a nightly run
+* `0`: success
+* `1`: failure (configuration errors, fatal fetch errors, zero records parsed, or unexpected exceptions)
+
+### Fatal vs non-fatal behavior (detail-follow mode)
+
+Fatal:
+
+* invalid config
+* list page fetch failure
+* settings load failure (malformed settings file)
+* no records produced after processing
+
+Non-fatal in detail-follow mode:
+
+* individual detail page fetch failures are **skipped**
+* the run can still succeed if at least one record is produced
+
+Operational implication:
+
+* If your requirements demand “all details must be fetched,” enforce this in downstream checks or extend the pipeline to fail on any detail failure.
+
+---
+
+## Scheduling
+
+### Linux/macOS cron (example)
+
+Nightly run with timestamped output and combined log capture:
+
 ```bash
-0 2 * * * /path/to/venv/bin/product-scraper --config /path/to/config/targets.yml --output /path/to/output/products.csv >> /path/to/logs/scraper.log 2>&1
+0 2 * * * cd /path/to/repo && \
+  . .venv/bin/activate && \
+  ts=$(date +"%Y%m%d_%H%M%S") && \
+  product-scraper --config config/targets.yml --output "output/runs/products_${ts}.csv" \
+  >> "output/logs/run_${ts}.log" 2>&1
 ```
 
-### Windows Task Scheduler (conceptual)
-Action: run `product-scraper`.
+Ensure directories exist:
 
-Arguments: `--config C:\path\to\config\targets.yml --output C:\path\to\output\products.csv`
+```bash
+mkdir -p output/runs output/logs
+```
 
-Ensure the task uses the correct Python/venv environment.
+### Windows Task Scheduler (PowerShell pattern)
 
-### CI-based runs (GitHub Actions)
-For internal monitoring or portfolio demos, you can schedule runs with GitHub Actions. Be mindful:
-- Do not scrape sites that disallow automated access.
-- Avoid hitting targets too frequently.
-- Prefer test sites or your own endpoints.
+Example command pattern (adjust paths to your environment):
+
+```powershell
+-Command "cd C:\path\to\repo; .\.venv\Scripts\Activate.ps1; `
+$ts=Get-Date -Format 'yyyyMMdd_HHmmss'; `
+New-Item -ItemType Directory -Force -Path output\runs, output\logs | Out-Null; `
+product-scraper --config config\targets.yml --output output\runs\products_$ts.csv *> output\logs\run_$ts.log"
+```
+
+### CI-based scheduled runs (when appropriate)
+
+CI scheduling can be appropriate for lightweight jobs when:
+
+* credentials and environment variables are handled securely
+* output storage is defined (artifact upload, external storage, or database)
+* network access is allowed and compliant for the use case
+
+Avoid using CI schedules if:
+
+* you cannot control IP reputation or network policy requirements
+* outputs must be persisted long-term but artifacts are insufficient
+
+---
+
+## Maintenance workflow
+
+Web pages change. Operational success depends on a tight drift-response loop.
+
+### Standard response when a target breaks
+
+1. Run a safe diagnostic:
+
+```bash
+product-scraper --config config/targets.yml --target-name <NAME> --dry-run --limit 10
+```
+
+2. If record count drops or missing counts spike:
+
+* inspect current HTML structure (minimize data collection)
+* update selectors in `config/targets.yml`
+* re-run dry-run
+* run a full run when stable
+
+3. Commit changes in small, reviewable diffs:
+
+* update only the selectors you need
+* keep target configs readable and well-scoped
+
+### Selector drift minimization tips
+
+Prefer selectors that are stable over time:
+
+* `data-*` attributes intended for automation/testing
+* stable IDs
+* stable class names (avoid brittle deep DOM paths)
 
 ---
 
 ## Troubleshooting
-This section lists common symptoms and fixes.
 
-Symptom: “Config validation error”  
-Common causes: missing required keys for the selected mode, empty selector strings, duplicate name across targets, wrong YAML indentation/type (mapping vs list).  
-Fix: validate YAML structure and required keys; use the examples in `config/targets.example.yml` as a baseline.
+### Configuration validation errors
 
-Symptom: “Zero records”  
-Likely causes: `item_selector` is wrong (list-only mode), `link_selector` is wrong (detail-follow mode), site structure changed, target returned different content due to geo/locale/cookies.  
-Fix: use `--dry-run` and temporarily log parsed counts; inspect live HTML in browser devtools; update selectors.
+Common causes:
 
-Symptom: “Many missing fields”  
-Likely causes: field selectors too specific; fields are loaded dynamically (SPA) and not present in raw HTML; different layouts for different items.  
-Fix: loosen selectors; for SPA targets, consider an official API if available or a rendered browser approach only if compliant and required; add conditional extraction logic if needed.
+* missing required keys for the selected mode
+* empty selector strings
+* duplicate target names
 
-Symptom: “Frequent 429 / blocks”  
-Fix: increase `delay_seconds`; enable backoff (set `retry_backoff_seconds > 0`); reduce concurrency (template is single-threaded by default); use more conservative headers and caching; re-check ToS and confirm scraping is allowed.
+Fix:
 
-Symptom: “Some URLs are still relative”  
-Fix: ensure the field name ends with `*_url`; confirm the raw value is a URL-like attribute (`href`, `src`); confirm your selector spec is extracting the attribute correctly (`@href`, `@src`).
+* validate your YAML against `docs/CONFIG_GUIDE.md`
+* use `--dry-run --limit 1` after changes
+
+### “It runs but returns empty records”
+
+Most often: selector mismatch or HTML drift.
+
+Steps:
+
+1. Dry-run with a small limit:
+
+```bash
+product-scraper --config config/targets.yml --dry-run --limit 10
+```
+
+2. Confirm selectors against current HTML.
+
+### Relative URLs appear in output
+
+Ensure the field name ends with `_url` (e.g., `product_url`, `image_url`).
+The pipeline normalizes `*_url` fields to absolute URLs when possible.
+
+### 403 / 429 / 5xx responses
+
+* Confirm authorization and policy constraints for the target.
+* Increase politeness:
+
+  * raise `delay_seconds`
+  * add backoff/jitter
+* Avoid aggressive behavior.
+
+### Timeouts
+
+* Increase `http.timeout`.
+* Reduce load while debugging with `--limit`.
+
+### Output write errors
+
+* Ensure output directories exist and have permissions.
+* Use an explicit `--output` path to avoid ambiguity.
+
+### What to collect before escalation
+
+When escalating an issue, capture:
+
+* the exact command used (redact sensitive values)
+* target name and list URL
+* relevant settings (redacted)
+* stderr/log excerpts around the failure
+* a minimal HTML snippet if permitted and necessary
 
 ---
 
-## Client delivery checklist
-This section provides a pre-delivery checklist.
+## Security, legal, and compliance reminders
 
-- Example commands in README run successfully on the client’s machine.
-- Target config validated (no silent schema drift).
-- Correct mode chosen (list-only vs detail-follow).
-- `*_url` fields normalized correctly (no broken image/product links).
-- Output schema matches the client’s expectations.
-- Retries/delays/backoff tuned to target behavior and compliance requirements.
-- Logging level set appropriately.
-- Clear operational instructions provided (where configs live, how to schedule, where outputs/logs are written).
-- Legal/compliance notes acknowledged (ToS/robots/data policy).
+This template is intentionally conservative: it provides operational controls (delay, retries, UA) and avoids bypass tooling. Operate responsibly:
 
----
+* follow Terms of Service and site policies
+* respect robots.txt expectations where applicable
+* minimize load and data collection
+* avoid collecting personal data unless explicitly authorized and necessary
+* do not attempt to bypass access controls or anti-bot protections
 
-## Related documentation
-This section links to other docs.
-
-- `docs/CONFIG_GUIDE.md` — configuration and selector syntax.
-- `docs/architecture.md` — module-level architecture and contracts.
-- `docs/testing.md` — test strategy and local dev workflow.
-- `docs/SECURITY_AND_LEGAL.md` — compliance, risk, and best practices.
+See the canonical guidance: `docs/SECURITY_AND_LEGAL.md`.
 
 ---
 
-_Last updated: 2025-12-12_
+## Delivery checklist
+
+Before presenting this repository as a finished deliverable:
+
+* [ ] CLI runs on a clean machine following README/Docs
+* [ ] `config/targets.yml` validates and selects the intended mode
+* [ ] `--dry-run --limit N` works for fast iteration
+* [ ] `*_url` fields normalize as expected
+* [ ] Output path precedence is understood and documented in your runbook
+* [ ] `delay_seconds`, retries, and timeouts are tuned for the target
+* [ ] Logs are captured in scheduled runs (stdout + stderr)
+* [ ] Non-zero exit codes are treated as failures in automation
+* [ ] Compliance posture is acknowledged (ToS/robots/data minimization)
+
+---
+
+## Appendix: Minimal configuration examples
+
+These examples are intentionally minimal. For full schema rules and selector spec syntax, see `docs/CONFIG_GUIDE.md`.
+
+### List-only target (minimal)
+
+```yaml
+targets:
+  - name: example-list
+    list_url: "https://example.com/products"
+    item_selector: "div.product-card"
+    item_fields:
+      title: "a.title@title"
+      price: ".price"
+      product_url: "a.title@href"
+      image_url: "img@src"
+```
+
+### Detail-follow target (minimal)
+
+```yaml
+targets:
+  - name: example-detail
+    list_url: "https://example.com/products"
+    link_selector: "a.product-link"
+    detail_selectors:
+      title: "h1"
+      price: ".price"
+      description: ".description"
+      image_url: "img@src"
+```
+
+### Settings (minimal)
+
+```yaml
+http:
+  user_agent: "Mozilla/5.0 (compatible; ProductListScraper/1.0)"
+  timeout: 10
+  max_retries: 3
+  delay_seconds: 1.0
+  retry_backoff_seconds: 0.0
+  retry_backoff_multiplier: 2.0
+  retry_jitter_seconds: 0.0
+
+output:
+  directory: "output/runs"
+  csv_filename: "products.csv"
+
+validation:
+  enabled: true
+
+logging:
+  level: "INFO"
+```
