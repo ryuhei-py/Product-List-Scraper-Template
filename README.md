@@ -440,4 +440,4 @@ This repository is intentionally modular. Common extensions include:
 
 ## License
 
-MIT (see `LICENSE`).
+MIT (see `LICENSE`)
