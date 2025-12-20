@@ -12,6 +12,18 @@ Designed for real-world delivery: configuration validation, deterministic tests 
 
 ---
 
+## Demo Screenshots
+
+* Demo Screenshots
+
+| Config (target definition) | CLI run (scrape 100 items) | Output preview (CSV) |
+| --- | --- | --- |
+| <img src="docs/img/readme/03_targets_yaml.png" width="320" alt="targets.yml example defining list_url, item selector, and extracted fields" /> | <img src="docs/img/readme/01_cli_proof_100.png" width="320" alt="CLI run proof: scraped 100 list-only records with zero missing fields" /> | <img src="docs/img/readme/02_excel_output_100.png" width="320" alt="run-100.csv opened in Excel showing title, price, description, product_url, source_list_url" /> |
+
+> Demo shown uses a public test site (webscraper.io). Replace with permitted sources for real work.
+
+---
+
 ## Table of Contents
 
 - [Highlights](#highlights)
